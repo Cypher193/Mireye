@@ -3,48 +3,61 @@ import { TopNav } from '@/components/TopNav';
 import { HexMap } from '@/components/HexMap';
 import { MetricCards } from '@/components/MetricCards';
 import { AIReasoningTrace } from '@/components/AIReasoningTrace';
-import { CapitalBrief } from '@/components/CapitalBrief';
 import { LocationSelector } from '@/components/LocationSelector';
 import { PhysicsBreakdown } from '@/components/PhysicsBreakdown';
 import { Phase2Card } from '@/components/Phase2Card';
 import { HowItWorksModal } from '@/components/HowItWorksModal';
-import { COUNTIES, generateHexGrid, getTopRiskHexes } from '@/data/hexGrid';
-import { buildReasoningTrace, generateCapitalBrief } from '@/data/reasoning';
-import type { HexCell, County, ReasoningLine, CapitalBriefResult } from '@/types';
+import { COUNTIES, generateHexGrid, getTopRiskHexes, generateUSAMapHexes } from '@/data/hexGrid';
+import { buildReasoningTrace } from '@/data/reasoning';
+import type { HexCell, County, ReasoningLine } from '@/types';
 
 function App() {
-  const [activeView, setActiveView] = useState('risk-map');
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [selectedCounty, setSelectedCounty] = useState<County>(COUNTIES[0]);
   const [selectedCell, setSelectedCell] = useState<HexCell | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [reasoningLines, setReasoningLines] = useState<ReasoningLine[]>([]);
   const [isReasoningRunning, setIsReasoningRunning] = useState(false);
-  const [briefResult, setBriefResult] = useState<CapitalBriefResult | null>(null);
-  const [isGeneratingBrief, setIsGeneratingBrief] = useState(false);
   const [phase2Active, setPhase2Active] = useState(false);
 
-  // Generate hex grid for selected county
+  // Map View Mode: 'usa' (National Map) or 'county' (Local Grid)
+  const [viewMode, setViewMode] = useState<'usa' | 'county'>('usa');
+
+  // Generate grids
   const cells = useMemo(() => generateHexGrid(selectedCounty.id), [selectedCounty.id]);
+  const usaHexes = useMemo(() => generateUSAMapHexes(), []);
 
-  // Auto-select top risk hex when county changes
+  // Sync selected cell when viewMode or county changes
   useEffect(() => {
-    const topHexes = getTopRiskHexes(cells, 1);
-    if (topHexes.length > 0) {
-      setSelectedCell(topHexes[0]);
+    if (viewMode === 'county') {
+      const topHexes = getTopRiskHexes(cells, 1);
+      if (topHexes.length > 0) {
+        setSelectedCell(topHexes[0]);
+      } else {
+        setSelectedCell(null);
+      }
     } else {
-      setSelectedCell(null);
+      // In USA mode, select the top hex overall or of the current county
+      const countyHexes = usaHexes.filter((h) => h.region === selectedCounty.id);
+      if (countyHexes.length > 0) {
+        const sorted = [...countyHexes].sort((a, b) => b.ccg - a.ccg);
+        setSelectedCell(sorted[0]);
+      }
     }
-    setBriefResult(null);
-  }, [cells]);
+  }, [cells, viewMode, selectedCounty.id, usaHexes]);
 
-  // The "displayed" cell — uses hovered cell if hovering, otherwise selected
+  // The cells currently being visualised in the layout
+  const activeCells = useMemo(() => {
+    return viewMode === 'usa' ? usaHexes : cells;
+  }, [viewMode, cells, usaHexes]);
+
+  // Display cell (hovered or selected)
   const displayCell = useMemo(() => {
     if (hoveredId) {
-      return cells.find((c) => c.id === hoveredId) ?? selectedCell;
+      return activeCells.find((c) => c.id === hoveredId) ?? selectedCell;
     }
     return selectedCell;
-  }, [hoveredId, cells, selectedCell]);
+  }, [hoveredId, activeCells, selectedCell]);
 
   // Run reasoning trace when selected cell changes
   useEffect(() => {
@@ -52,9 +65,9 @@ function App() {
       setReasoningLines([]);
       return;
     }
+
     setIsReasoningRunning(true);
     setReasoningLines(buildReasoningTrace(selectedCell, selectedCounty));
-    // Mark as "done" after all lines should have appeared
     const totalDelay = buildReasoningTrace(selectedCell, selectedCounty).reduce(
       (sum, l) => sum + l.delay,
       0
@@ -65,26 +78,18 @@ function App() {
 
   const handleSelectCell = useCallback((cell: HexCell) => {
     setSelectedCell(cell);
-    setBriefResult(null);
+    if (cell.region) {
+      const match = COUNTIES.find((c) => c.id === cell.region);
+      if (match) {
+        setSelectedCounty(match);
+        setViewMode('county'); // Auto-zoom to local county grid
+      }
+    }
   }, []);
-
-  const handleGenerateBrief = useCallback(() => {
-    if (!selectedCell) return;
-    setIsGeneratingBrief(true);
-    setBriefResult(null);
-    // Simulate physics computation time
-    setTimeout(() => {
-      const result = generateCapitalBrief(selectedCell, selectedCounty);
-      setBriefResult(result);
-      setIsGeneratingBrief(false);
-    }, 2200);
-  }, [selectedCell, selectedCounty]);
 
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-ink-100">
       <TopNav
-        activeView={activeView}
-        onViewChange={setActiveView}
         onHowItWorks={() => setShowHowItWorks(true)}
       />
 
@@ -99,7 +104,7 @@ function App() {
               selected={selectedCounty}
               onSelect={(c) => {
                 setSelectedCounty(c);
-                setBriefResult(null);
+                setViewMode('county'); // Auto-zoom to county grid
               }}
             />
 
@@ -138,17 +143,6 @@ function App() {
             {/* Divider */}
             <div className="my-4 border-t border-ink-800/50" />
 
-            {/* Capital Brief */}
-            <CapitalBrief
-              result={briefResult}
-              isGenerating={isGeneratingBrief}
-              onGenerate={handleGenerateBrief}
-              canGenerate={!!selectedCell}
-            />
-
-            {/* Divider */}
-            <div className="my-4 border-t border-ink-800/50" />
-
             {/* Phase 2 Card */}
             <Phase2Card isActive={phase2Active} onToggle={() => setPhase2Active((v) => !v)} />
           </div>
@@ -158,10 +152,14 @@ function App() {
         <main className="relative flex-1 overflow-hidden">
           <HexMap
             cells={cells}
+            usaCells={usaHexes}
             selectedId={selectedCell?.id ?? null}
             onSelect={handleSelectCell}
             hoveredId={hoveredId}
             onHover={setHoveredId}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            connection="connected"
           />
         </main>
       </div>

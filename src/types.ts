@@ -17,6 +17,9 @@ export interface HexCell {
   housingUnits: number;
   wuiCluster: boolean;
   riskLabel: 'Low' | 'Moderate' | 'High' | 'Severe';
+  state?: string;
+  county?: string;
+  region?: string;
 }
 
 export interface County {
@@ -28,6 +31,9 @@ export interface County {
   wuiHousingUnits: number;
   fireDistricts: number;
   staffedStations: number;
+  cx?: number;
+  cy?: number;
+  cityName?: string;
 }
 
 export interface ReasoningLine {
