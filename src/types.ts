@@ -1,3 +1,5 @@
+// ── Core domain types ─────────────────────────────────────────────────────
+
 export interface HexCell {
   id: string;
   row: number;
@@ -20,6 +22,12 @@ export interface HexCell {
   state?: string;
   county?: string;
   region?: string;
+  // Real API metadata (populated when data comes from Mireye)
+  lat?: number;
+  lng?: number;
+  nearestStationName?: string;
+  nearestStationSource?: 'api' | 'fallback';
+  mireyeLatencyMs?: number;
 }
 
 export interface County {
@@ -34,6 +42,9 @@ export interface County {
   cx?: number;
   cy?: number;
   cityName?: string;
+  // Real geocoded lat/lng (populated from Mireye /v1/geocode)
+  lat?: number;
+  lng?: number;
 }
 
 export interface ReasoningLine {
@@ -52,3 +63,37 @@ export interface CapitalBriefResult {
   driveTimeMin: number;
   paragraphs: string[];
 }
+
+// ── Mireye API types ───────────────────────────────────────────────────────
+
+/**
+ * Raw field shape returned by Mireye /v1/fetch with wildfire_underwrite preset.
+ */
+export interface MireyeWildfireFields {
+  slope_degrees: number;
+  tree_canopy_pct: number;
+  ndvi_current: number;
+  ndvi_change_5y: number;
+  lcms_class: string;  // e.g. 'Trees', 'Shrubs', 'Barren or Impervious', 'Water'
+  elevation: number;
+}
+
+/**
+ * USFA fire station record with geocoded coordinates.
+ */
+export interface StationRecord {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  lat: number;
+  lng: number;
+  staffed: boolean;
+  type: 'career' | 'volunteer' | 'combination';
+}
+
+/**
+ * API loading status across the application.
+ */
+export type ApiStatus = 'idle' | 'loading' | 'error' | 'ok';

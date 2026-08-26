@@ -21,3 +21,7 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Agent artifacts
+implementation_plan.md
+coverage_combustibility.md

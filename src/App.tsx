@@ -1,15 +1,23 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { TopNav } from '@/components/TopNav';
-import { HexMap } from '@/components/HexMap';
+import { GoogleMap } from '@/components/GoogleMap';
 import { MetricCards } from '@/components/MetricCards';
 import { AIReasoningTrace } from '@/components/AIReasoningTrace';
 import { LocationSelector } from '@/components/LocationSelector';
 import { PhysicsBreakdown } from '@/components/PhysicsBreakdown';
 import { Phase2Card } from '@/components/Phase2Card';
 import { HowItWorksModal } from '@/components/HowItWorksModal';
-import { COUNTIES, generateHexGrid, getTopRiskHexes, generateUSAMapHexes } from '@/data/hexGrid';
+import {
+  COUNTIES,
+  fetchHexGrid,
+  generateHexGridSkeleton,
+  getTopRiskHexes,
+  generateUSAMapHexes,
+  clearHexCache,
+} from '@/data/hexGrid';
 import { buildReasoningTrace } from '@/data/reasoning';
-import type { HexCell, County, ReasoningLine } from '@/types';
+import { verifyWildfireFields } from '@/lib/mireyeClient';
+import type { HexCell, County, ReasoningLine, ApiStatus } from '@/types';
 
 function App() {
   const [showHowItWorks, setShowHowItWorks] = useState(false);
@@ -23,11 +31,57 @@ function App() {
   // Map View Mode: 'usa' (National Map) or 'county' (Local Grid)
   const [viewMode, setViewMode] = useState<'usa' | 'county'>('usa');
 
-  // Generate grids
-  const cells = useMemo(() => generateHexGrid(selectedCounty.id), [selectedCounty.id]);
+  // ── API state ──────────────────────────────────────────────────────────
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('idle');
+  const [hexLoadStatus, setHexLoadStatus] = useState<ApiStatus>('idle');
+  const [cells, setCells] = useState<HexCell[]>(() => generateHexGridSkeleton(COUNTIES[0].id));
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [cacheBuster, setCacheBuster] = useState(0);
+
+  const handleClearCache = useCallback(() => {
+    clearHexCache();
+    setCacheBuster((prev) => prev + 1);
+  }, []);
+
+  // USA overview hexes (deterministic, no API call — static county metadata)
   const usaHexes = useMemo(() => generateUSAMapHexes(), []);
 
-  // Sync selected cell when viewMode or county changes
+  // ── Phase 1: Verify Mireye field catalog on mount ─────────────────────
+  useEffect(() => {
+    setApiStatus('loading');
+    verifyWildfireFields()
+      .then((status) => setApiStatus(status))
+      .catch(() => setApiStatus('error'));
+  }, []);
+
+  // ── Phase 2+3: Fetch hex grid on county change ──────────────────────
+  useEffect(() => {
+    setHexLoadStatus('loading');
+    setApiError(null);
+
+    // Show skeleton immediately while fetching
+    setCells(generateHexGridSkeleton(selectedCounty.id));
+
+    fetchHexGrid(selectedCounty.id)
+      .then((newCells) => {
+        setCells(newCells);
+        setHexLoadStatus('ok');
+
+        // Auto-select top risk hex after load
+        if (viewMode === 'county') {
+          const top = getTopRiskHexes(newCells, 1);
+          if (top.length > 0) setSelectedCell(top[0]);
+        }
+      })
+      .catch((err) => {
+        console.error('[App] fetchHexGrid failed:', err);
+        setApiError(err instanceof Error ? err.message : String(err));
+        setHexLoadStatus('error');
+        // Keep skeleton on error so UI doesn't break
+      });
+  }, [selectedCounty.id, cacheBuster]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sync selected cell when viewMode changes ───────────────────────────
   useEffect(() => {
     if (viewMode === 'county') {
       const topHexes = getTopRiskHexes(cells, 1);
@@ -37,19 +91,20 @@ function App() {
         setSelectedCell(null);
       }
     } else {
-      // In USA mode, select the top hex overall or of the current county
+      // In USA mode, select top hex of current county
       const countyHexes = usaHexes.filter((h) => h.region === selectedCounty.id);
       if (countyHexes.length > 0) {
         const sorted = [...countyHexes].sort((a, b) => b.ccg - a.ccg);
         setSelectedCell(sorted[0]);
       }
     }
-  }, [cells, viewMode, selectedCounty.id, usaHexes]);
+  }, [viewMode, selectedCounty.id, usaHexes]); // omit `cells` to avoid loop
 
-  // The cells currently being visualised in the layout
-  const activeCells = useMemo(() => {
-    return viewMode === 'usa' ? usaHexes : cells;
-  }, [viewMode, cells, usaHexes]);
+  // The cells currently being visualized
+  const activeCells = useMemo(
+    () => (viewMode === 'usa' ? usaHexes : cells),
+    [viewMode, cells, usaHexes]
+  );
 
   // Display cell (hovered or selected)
   const displayCell = useMemo(() => {
@@ -59,7 +114,7 @@ function App() {
     return selectedCell;
   }, [hoveredId, activeCells, selectedCell]);
 
-  // Run reasoning trace when selected cell changes
+  // ── Phase 4: Reasoning trace from real API metadata ──────────────────
   useEffect(() => {
     if (!selectedCell) {
       setReasoningLines([]);
@@ -67,31 +122,47 @@ function App() {
     }
 
     setIsReasoningRunning(true);
-    setReasoningLines(buildReasoningTrace(selectedCell, selectedCounty));
-    const totalDelay = buildReasoningTrace(selectedCell, selectedCounty).reduce(
-      (sum, l) => sum + l.delay,
-      0
-    );
+    const lines = buildReasoningTrace(selectedCell, selectedCounty);
+    setReasoningLines(lines);
+    const totalDelay = lines.reduce((sum, l) => sum + l.delay, 0);
     const timer = setTimeout(() => setIsReasoningRunning(false), totalDelay + 200);
     return () => clearTimeout(timer);
   }, [selectedCell, selectedCounty]);
 
-  const handleSelectCell = useCallback((cell: HexCell) => {
-    setSelectedCell(cell);
-    if (cell.region) {
-      const match = COUNTIES.find((c) => c.id === cell.region);
-      if (match) {
-        setSelectedCounty(match);
-        setViewMode('county'); // Auto-zoom to local county grid
+  const handleSelectCell = useCallback(
+    (cell: HexCell) => {
+      setSelectedCell(cell);
+      if (cell.region) {
+        const match = COUNTIES.find((c) => c.id === cell.region);
+        if (match) {
+          setSelectedCounty(match);
+          setViewMode('county');
+        }
       }
-    }
-  }, []);
+    },
+    []
+  );
+
+  // ── API status indicator ───────────────────────────────────────────────
+  const connectionStatus = useMemo((): 'connected' | 'loading' | 'error' => {
+    if (apiStatus === 'error' || hexLoadStatus === 'error') return 'error';
+    if (apiStatus === 'loading' || hexLoadStatus === 'loading') return 'loading';
+    if (apiStatus === 'ok') return 'connected';
+    return 'loading';
+  }, [apiStatus, hexLoadStatus]);
 
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-ink-100">
-      <TopNav
-        onHowItWorks={() => setShowHowItWorks(true)}
-      />
+      <TopNav onHowItWorks={() => setShowHowItWorks(true)} onClearCache={handleClearCache} />
+
+      {/* API Error Banner */}
+      {apiError && (
+        <div className="flex items-center gap-2 border-b border-red-900/50 bg-red-950/80 px-4 py-2 text-xs text-red-300">
+          <span className="font-bold">API Error:</span>
+          <span className="font-mono">{apiError}</span>
+          <span className="ml-auto text-red-500">Check VITE_MIREYE_API_KEY in .env</span>
+        </div>
+      )}
 
       {/* Main split layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -102,9 +173,10 @@ function App() {
             <LocationSelector
               counties={COUNTIES}
               selected={selectedCounty}
+              isLoading={hexLoadStatus === 'loading'}
               onSelect={(c) => {
                 setSelectedCounty(c);
-                setViewMode('county'); // Auto-zoom to county grid
+                setViewMode('county');
               }}
             />
 
@@ -118,9 +190,16 @@ function App() {
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
                     {hoveredId && hoveredId !== selectedCell?.id ? 'Previewing' : 'Selected Hex'}
                   </span>
-                  <span className="font-mono text-[10px] text-ink-400">
-                    {displayCell.id.toUpperCase().slice(-6)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {displayCell.nearestStationSource === 'api' && (
+                      <span className="rounded bg-emerald-900/40 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-400">
+                        LIVE DATA
+                      </span>
+                    )}
+                    <span className="font-mono text-[10px] text-ink-400">
+                      {displayCell.id.toUpperCase().slice(-6)}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
@@ -150,7 +229,7 @@ function App() {
 
         {/* Right — Map */}
         <main className="relative flex-1 overflow-hidden">
-          <HexMap
+          <GoogleMap
             cells={cells}
             usaCells={usaHexes}
             selectedId={selectedCell?.id ?? null}
@@ -159,7 +238,8 @@ function App() {
             onHover={setHoveredId}
             viewMode={viewMode}
             onViewModeChange={setViewMode}
-            connection="connected"
+            connection={connectionStatus}
+            isLoading={hexLoadStatus === 'loading'}
           />
         </main>
       </div>
