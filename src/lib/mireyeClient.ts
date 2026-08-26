@@ -104,7 +104,8 @@ export interface MireyeProximityResult {
 async function mireyeRequest<T>(
   method: 'GET' | 'POST',
   path: string,
-  body?: unknown
+  body?: unknown,
+  retriesRemaining: number = 3
 ): Promise<T> {
   if (!API_KEY) {
     throw new Error('VITE_MIREYE_API_KEY is not set. Add it to your .env file.');
@@ -119,6 +120,35 @@ async function mireyeRequest<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+
+  // Handle Rate Limiting (429) with automatic backoff retry
+  if (res.status === 429 && retriesRemaining > 0) {
+    let retryAfterSeconds = 5; // Default fallback
+
+    const retryHeader = res.headers.get('Retry-After');
+    if (retryHeader) {
+      const parsed = parseInt(retryHeader, 10);
+      if (!isNaN(parsed)) {
+        retryAfterSeconds = parsed;
+      }
+    } else {
+      try {
+        const errorData = await res.clone().json() as { detail?: { retry_after_s?: number } };
+        if (errorData?.detail?.retry_after_s) {
+          retryAfterSeconds = errorData.detail.retry_after_s;
+        }
+      } catch {
+        // Fallback if parsing fails
+      }
+    }
+
+    console.warn(
+      `[Mireye Client] Rate limited (429) on ${path}. Retrying in ${retryAfterSeconds}s... (${retriesRemaining} retries left)`
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
+    return mireyeRequest<T>(method, path, body, retriesRemaining - 1);
+  }
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => 'Unknown error');
@@ -258,30 +288,32 @@ export async function fetchBatch(
   locations: MireyeLocation[],
   fields: WildfireField[] = [...WILDFIRE_FIELDS]
 ): Promise<MireyeBatchResult[]> {
-  const results: MireyeBatchResult[] = [];
-
+  const chunks: MireyeLocation[][] = [];
   for (let i = 0; i < locations.length; i += BATCH_SIZE) {
-    const chunk = locations.slice(i, i + BATCH_SIZE);
-    const chunkNum = Math.floor(i / BATCH_SIZE) + 1;
-    const totalChunks = Math.ceil(locations.length / BATCH_SIZE);
-    console.log(`[Mireye] Batch fetch chunk ${chunkNum}/${totalChunks} (${chunk.length} locations)`);
+    chunks.push(locations.slice(i, i + BATCH_SIZE));
+  }
+
+  const chunkPromises = chunks.map(async (chunk, chunkIdx) => {
+    // Stagger chunk fetches slightly to prevent instantaneous rate limit spikes
+    if (chunkIdx > 0) {
+      await new Promise((resolve) => setTimeout(resolve, chunkIdx * 150));
+    }
 
     const res = await mireyeRequest<MireyeBatchResponse>('POST', '/v1/fetch/batch', {
       locations: chunk.map((l) => ({ lat: l.lat, lng: l.lng })),
       fields,
     });
 
-    const chunkResults: MireyeBatchResult[] = (res.results ?? []).map((item) => ({
+    return (res.results ?? []).map((item) => ({
       lat: item.lat,
       lng: item.lng,
       fields: item.ok ? extractFields(item.fields) : {},
       error: item.ok ? undefined : 'Fetch failed for this location',
     }));
+  });
 
-    results.push(...chunkResults);
-  }
-
-  return results;
+  const chunkedResults = await Promise.all(chunkPromises);
+  return chunkedResults.flat();
 }
 
 // ── Credit Quote ───────────────────────────────────────────────────────────

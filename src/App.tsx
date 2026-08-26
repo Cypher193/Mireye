@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { TopNav } from '@/components/TopNav';
-import { HexMap } from '@/components/HexMap';
+import { GoogleMap } from '@/components/GoogleMap';
 import { MetricCards } from '@/components/MetricCards';
 import { AIReasoningTrace } from '@/components/AIReasoningTrace';
 import { LocationSelector } from '@/components/LocationSelector';
@@ -13,6 +13,7 @@ import {
   generateHexGridSkeleton,
   getTopRiskHexes,
   generateUSAMapHexes,
+  clearHexCache,
 } from '@/data/hexGrid';
 import { buildReasoningTrace } from '@/data/reasoning';
 import { verifyWildfireFields } from '@/lib/mireyeClient';
@@ -35,6 +36,12 @@ function App() {
   const [hexLoadStatus, setHexLoadStatus] = useState<ApiStatus>('idle');
   const [cells, setCells] = useState<HexCell[]>(() => generateHexGridSkeleton(COUNTIES[0].id));
   const [apiError, setApiError] = useState<string | null>(null);
+  const [cacheBuster, setCacheBuster] = useState(0);
+
+  const handleClearCache = useCallback(() => {
+    clearHexCache();
+    setCacheBuster((prev) => prev + 1);
+  }, []);
 
   // USA overview hexes (deterministic, no API call — static county metadata)
   const usaHexes = useMemo(() => generateUSAMapHexes(), []);
@@ -72,7 +79,7 @@ function App() {
         setHexLoadStatus('error');
         // Keep skeleton on error so UI doesn't break
       });
-  }, [selectedCounty.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedCounty.id, cacheBuster]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync selected cell when viewMode changes ───────────────────────────
   useEffect(() => {
@@ -146,7 +153,7 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-ink-100">
-      <TopNav onHowItWorks={() => setShowHowItWorks(true)} />
+      <TopNav onHowItWorks={() => setShowHowItWorks(true)} onClearCache={handleClearCache} />
 
       {/* API Error Banner */}
       {apiError && (
@@ -222,7 +229,7 @@ function App() {
 
         {/* Right — Map */}
         <main className="relative flex-1 overflow-hidden">
-          <HexMap
+          <GoogleMap
             cells={cells}
             usaCells={usaHexes}
             selectedId={selectedCell?.id ?? null}

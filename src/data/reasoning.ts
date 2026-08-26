@@ -42,7 +42,7 @@ export function buildReasoningTrace(
 
     // Field fetch
     { text: `> POST /v1/fetch/batch (preset: wildfire_underwrite)`, type: 'command', delay: 350 },
-    { text: `  hex: ${cell.id} · lat=${latStr} lng=${lngStr}`, type: 'info', delay: 200 },
+    { text: `  zone: ${cell.id} · lat=${latStr} lng=${lngStr}`, type: 'info', delay: 200 },
     { text: `  slope_degrees=${slopeDegrees}°  tree_canopy_pct=${(cell.fuelProxy * 100).toFixed(0)}%`, type: 'result', delay: 300 },
     { text: `  ndvi_current=${(cell.wind > 0 ? (1 - cell.wind) * 0.9 : 0.4).toFixed(2)}  ndvi_change_5y=${(-(cell.wind) * 0.5 + 0.05).toFixed(3)}`, type: 'result', delay: 250 },
     { text: `  elevation=${Math.round((1 - cell.thermalInertia) * 4000)}m  wui=${cell.wuiCluster ? 'YES (LCMS class ≥4)' : 'NO'}`, type: 'result', delay: 250 },
@@ -89,7 +89,7 @@ export function generateCapitalBrief(
     : 'estimated';
 
   const p1 =
-    `Hex ${cell.id.toUpperCase()} in ${county.name}, ${county.state} exhibits a ${riskWord} ` +
+    `WUI Zone ${cell.id.toUpperCase()} in ${county.name}, ${county.state} exhibits a ${riskWord} ` +
     `Coverage-Combustibility Gap (CCG = ${cell.ccg.toFixed(3)}), driven by an Ignition ` +
     `Propensity Score of ${cell.ips.toFixed(3)} against a Response Capacity Score of ` +
     `${cell.rcs.toFixed(3)}. ` +

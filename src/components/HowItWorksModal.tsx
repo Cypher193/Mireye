@@ -171,7 +171,7 @@ export function HowItWorksModal({ isOpen, onClose }: HowItWorksModalProps) {
               </div>
             </div>
             <p className="text-[10px] text-ink-400">
-              Each hex cell receives a multiplicative CCG score (IPS × (1 − RCS)) with full
+              Each WUI grid cell receives a multiplicative CCG score (IPS × (1 − RCS)) with full
               physics provenance. Top-ranked gaps generate executive-ready capital allocation
               briefs with quantified resource recommendations.
             </p>

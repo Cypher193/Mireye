@@ -34,6 +34,8 @@ export const COUNTIES: County[] = [
     cx: 317,
     cy: 255,
     cityName: 'Boulder',
+    lat: 40.015,
+    lng: -105.271,
   },
   {
     id: 'flagstaff-az',
@@ -47,6 +49,8 @@ export const COUNTIES: County[] = [
     cx: 194,
     cy: 345,
     cityName: 'Flagstaff',
+    lat: 35.198,
+    lng: -111.651,
   },
   {
     id: 'santa-barbara-ca',
@@ -60,6 +64,8 @@ export const COUNTIES: County[] = [
     cx: 95,
     cy: 310,
     cityName: 'Santa Barbara',
+    lat: 34.420,
+    lng: -119.698,
   },
   {
     id: 'bend-or',
@@ -73,6 +79,8 @@ export const COUNTIES: County[] = [
     cx: 96,
     cy: 118,
     cityName: 'Bend',
+    lat: 44.058,
+    lng: -121.315,
   },
   {
     id: 'missoula-mt',
@@ -86,6 +94,8 @@ export const COUNTIES: County[] = [
     cx: 225,
     cy: 90,
     cityName: 'Missoula',
+    lat: 46.872,
+    lng: -113.994,
   },
   {
     id: 'kerr-tx',
@@ -99,6 +109,8 @@ export const COUNTIES: County[] = [
     cx: 390,
     cy: 470,
     cityName: 'Kerrville',
+    lat: 30.047,
+    lng: -99.140,
   },
   {
     id: 'fannin-ga',
@@ -112,6 +124,8 @@ export const COUNTIES: County[] = [
     cx: 714,
     cy: 380,
     cityName: 'Blue Ridge',
+    lat: 34.855,
+    lng: -84.320,
   },
 ];
 
@@ -146,6 +160,10 @@ const geocodeCache = new Map<string, { lat: number; lng: number }>();
  * Results are in-memory cached for the session.
  */
 async function geocodeCounty(county: County): Promise<{ lat: number; lng: number }> {
+  if (county.lat !== undefined && county.lng !== undefined) {
+    return { lat: county.lat, lng: county.lng };
+  }
+
   const cacheKey = county.id;
   if (geocodeCache.has(cacheKey)) {
     return geocodeCache.get(cacheKey)!;
@@ -206,8 +224,27 @@ function generateCentroidGrid(
   return locations;
 }
 
-// ── Session-level hex physics cache ───────────────────────────────────────
-const hexCache = new Map<string, HexCell[]>();
+// ── LocalStorage-level hex physics cache ──────────────────────────────────
+const CACHE_VERSION = 'v1';
+const getCacheKey = (countyId: string) => `ccg_grid_${CACHE_VERSION}_${countyId}`;
+
+function readLocalGridCache(countyId: string): HexCell[] | null {
+  try {
+    const raw = localStorage.getItem(getCacheKey(countyId));
+    return raw ? (JSON.parse(raw) as HexCell[]) : null;
+  } catch (err) {
+    console.warn('[HexGrid] Cache read failed:', err);
+    return null;
+  }
+}
+
+function writeLocalGridCache(countyId: string, cells: HexCell[]): void {
+  try {
+    localStorage.setItem(getCacheKey(countyId), JSON.stringify(cells));
+  } catch (err) {
+    console.warn('[HexGrid] Cache write failed:', err);
+  }
+}
 
 /**
  * Fetches a fully-populated hex grid for a county using live Mireye API data.
@@ -216,12 +253,13 @@ const hexCache = new Map<string, HexCell[]>();
  * - Fetches nearest station drive-time for each hex via /v1/proximity
  * - Computes IPS, RCS, CCG from deterministic formulas (no random)
  *
- * Results are cached in memory for the session.
+ * Results are cached in LocalStorage.
  */
 export async function fetchHexGrid(countyId: string): Promise<HexCell[]> {
-  if (hexCache.has(countyId)) {
-    console.log(`[HexGrid] Cache hit for ${countyId}`);
-    return hexCache.get(countyId)!;
+  const cached = readLocalGridCache(countyId);
+  if (cached && cached.length > 0) {
+    console.log(`[HexGrid] LocalStorage Cache hit for ${countyId}`);
+    return cached;
   }
 
   const county = COUNTIES.find((c) => c.id === countyId);
@@ -251,86 +289,78 @@ export async function fetchHexGrid(countyId: string): Promise<HexCell[]> {
   const cells: HexCell[] = [];
   const t0 = Date.now();
 
-  // Proximity calls are expensive — batch with small concurrency
-  const CONCURRENCY = 4;
-  let i = 0;
+  // Warm-up call on county centroid to identify failed curated sets and prime cache
+  console.log(`[HexGrid] Warm-up proximity API check at centroid...`);
+  await fetchNearestStation(centerLat, centerLng);
 
-  while (i < locations.length) {
-    const batch = locations.slice(i, i + CONCURRENCY);
-    const batchPhysics = physicsResults.slice(i, i + CONCURRENCY);
+  // Process all locations in parallel
+  console.log(`[HexGrid] Processing ${locations.length} cell metrics in parallel...`);
+  await Promise.all(
+    locations.map(async (loc, globalIdx) => {
+      const row = Math.floor(globalIdx / COLS);
+      const col = globalIdx % COLS;
+      const physResult = physicsResults[globalIdx];
 
-    await Promise.all(
-      batch.map(async (loc, bIdx) => {
-        const globalIdx = i + bIdx;
-        const row = Math.floor(globalIdx / COLS);
-        const col = globalIdx % COLS;
-        const physResult = batchPhysics[bIdx];
+      // SVG coordinates for the hex map panel
+      const offset = row % 2 === 1 ? HEX_W / 2 : 0;
+      const cx = col * HEX_W + offset + HEX_W;
+      const cy = row * HEX_H + HEX_SIZE + 4;
 
-        // SVG coordinates for the hex map panel
-        const offset = row % 2 === 1 ? HEX_W / 2 : 0;
-        const cx = col * HEX_W + offset + HEX_W;
-        const cy = row * HEX_H + HEX_SIZE + 4;
+      const rawFields = physResult?.fields ?? {};
 
-        const rawFields = physResult?.fields ?? {};
+      // IPS — from real Mireye fields
+      const ipsResult = computeIPS(rawFields);
 
-        // IPS — from real Mireye fields
-        const ipsResult = computeIPS(rawFields);
+      // RCS — from real proximity API (will hit cache or instantly use fallback)
+      const stationData = await fetchNearestStation(loc.lat, loc.lng);
+      const rcsResult = computeRCS(stationData.driveTimeMin, county.staffedStations);
 
-        // RCS — from real proximity API
-        const stationData = await fetchNearestStation(loc.lat, loc.lng);
-        const rcsResult = computeRCS(stationData.driveTimeMin, county.staffedStations);
+      // CCG — multiplicative gap
+      const ccg = computeCCG(ipsResult.ips, rcsResult.rcs);
 
-        // CCG — multiplicative gap
-        const ccg = computeCCG(ipsResult.ips, rcsResult.rcs);
+      // WUI classification based on lcms_class string value
+      const lcmsClass = rawFields.lcms_class ?? '';
+      const wuiCluster = lcmsClass === 'Trees' || lcmsClass === 'Shrubs' || lcmsClass.includes('Tree');
 
-        // WUI classification based on lcms_class string value
-        // 'Trees' and 'Shrubs' = vegetated land cover in WUI zone
-        const lcmsClass = rawFields.lcms_class ?? '';
-        const wuiCluster = lcmsClass === 'Trees' || lcmsClass === 'Shrubs' || lcmsClass.includes('Tree');
+      // Housing units estimated from WUI proximity and CCG risk
+      const housingUnits = wuiCluster
+        ? Math.round(50 + ccg * 400 + (county.wuiHousingUnits / 64))
+        : Math.round(county.wuiHousingUnits / 128);
 
-        // Housing units estimated from WUI proximity and CCG risk
-        const housingUnits = wuiCluster
-          ? Math.round(50 + ccg * 400 + (county.wuiHousingUnits / 64))
-          : Math.round(county.wuiHousingUnits / 128);
-
-        cells[globalIdx] = {
-          id: `${countyId}-h${row}${col}`,
-          row,
-          col,
-          cx,
-          cy,
-          vertices: hexVertices(cx, cy, HEX_SIZE - 1.5),
-          ips: ipsResult.ips,
-          rcs: rcsResult.rcs,
-          ccg,
-          // Normalized physics values for display (slope in degrees → 0-1 for display bar)
-          fuelProxy: ipsResult.fuelNorm,
-          slope: ipsResult.slopeNorm,
-          wind: ipsResult.windProxyNorm,
-          thermalInertia: ipsResult.thermalInertia,
-          driveTimeMin: rcsResult.driveTimeMin,
-          staffedStations: rcsResult.staffedStations,
-          housingUnits,
-          wuiCluster,
-          riskLabel: toRiskLabel(ccg),
-          lat: loc.lat,
-          lng: loc.lng,
-          nearestStationName: stationData.name,
-          nearestStationSource: stationData.source,
-          mireyeLatencyMs: Date.now() - t0,
-        };
-      })
-    );
-
-    i += CONCURRENCY;
-  }
+      cells[globalIdx] = {
+        id: `${countyId}-h${row}${col}`,
+        row,
+        col,
+        cx,
+        cy,
+        vertices: hexVertices(cx, cy, HEX_SIZE - 1.5),
+        ips: ipsResult.ips,
+        rcs: rcsResult.rcs,
+        ccg,
+        fuelProxy: ipsResult.fuelNorm,
+        slope: ipsResult.slopeNorm,
+        wind: ipsResult.windProxyNorm,
+        thermalInertia: ipsResult.thermalInertia,
+        driveTimeMin: rcsResult.driveTimeMin,
+        staffedStations: rcsResult.staffedStations,
+        housingUnits,
+        wuiCluster,
+        riskLabel: toRiskLabel(ccg),
+        lat: loc.lat,
+        lng: loc.lng,
+        nearestStationName: stationData.name,
+        nearestStationSource: stationData.source,
+        mireyeLatencyMs: Date.now() - t0,
+      };
+    })
+  );
 
   console.log(`[HexGrid] Built ${cells.length} hex cells in ${Date.now() - t0}ms`);
   console.groupEnd();
 
   // Filter nulls (shouldn't happen) and cache
   const validCells = cells.filter(Boolean);
-  hexCache.set(countyId, validCells);
+  writeLocalGridCache(countyId, validCells);
   return validCells;
 }
 
@@ -467,7 +497,13 @@ export function generateUSAMapHexes(): HexCell[] {
 
 /** Clears the hex physics cache (useful when switching API keys or testing). */
 export function clearHexCache(): void {
-  hexCache.clear();
   geocodeCache.clear();
-  console.log('[HexGrid] Cache cleared');
+  try {
+    COUNTIES.forEach((county) => {
+      localStorage.removeItem(getCacheKey(county.id));
+    });
+    console.log('[HexGrid] LocalStorage Cache cleared');
+  } catch (err) {
+    console.warn('[HexGrid] LocalStorage cache clear failed:', err);
+  }
 }

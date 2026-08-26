@@ -55,6 +55,9 @@ export interface StationData {
   source: 'api' | 'fallback';
 }
 
+// Keep track of failed sets to prevent rate-limiting ourselves with retries
+const failedSets = new Set<string>();
+
 /**
  * Fetches the nearest fire station for a coordinate via Mireye /v1/proximity.
  * Results are cached in sessionStorage to avoid repeated API calls.
@@ -80,6 +83,8 @@ export async function fetchNearestStation(lat: number, lng: number): Promise<Sta
   // Try Mireye proximity — various set names to find what's available
   const sets = ['@fire_stations', '@emergency_services', '@usfa'];
   for (const set of sets) {
+    if (failedSets.has(set)) continue;
+
     const result = await proximityNearest(lat, lng, set);
     if (result) {
       writeCache(key, result);
@@ -92,6 +97,9 @@ export async function fetchNearestStation(lat: number, lng: number): Promise<Sta
         driveTimeMin: result.durationSeconds / 60,
         source: 'api',
       };
+    } else {
+      console.warn(`[rcsEngine] Curated set "${set}" is unavailable. Disabling for session.`);
+      failedSets.add(set);
     }
   }
 

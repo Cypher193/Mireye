@@ -58,7 +58,7 @@ export function draftCapitalBrief(
 
   // Paragraph 1: Ignition risk characterization from real field data
   const p1 =
-    `Hex ${cell.id.toUpperCase()} in ${county.name}, ${county.state} exhibits a ${riskWord} ` +
+    `WUI Zone ${cell.id.toUpperCase()} in ${county.name}, ${county.state} exhibits a ${riskWord} ` +
     `Coverage-Combustibility Gap (CCG = ${cell.ccg.toFixed(3)}), driven by an Ignition Propensity ` +
     `Score of ${cell.ips.toFixed(3)} against a Response Capacity Score of ${cell.rcs.toFixed(3)}. ` +
     `The primary IPS driver is ${dominantDriver}. ` +
