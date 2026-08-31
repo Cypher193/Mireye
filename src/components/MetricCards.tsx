@@ -1,4 +1,6 @@
 import type { HexCell } from '@/types';
+import { getApparatusRecommendations } from '@/lib/apparatusEngine';
+import { Shield, AlertTriangle, CheckCircle, HelpCircle } from 'lucide-react';
 
 interface MetricCardProps {
   cell: HexCell | null;
@@ -48,6 +50,21 @@ export function MetricCards({ cell }: MetricCardProps) {
   const ipsColor = ips >= 0.7 ? '#DC2626' : ips >= 0.5 ? '#EA580C' : '#F59E0B';
   const rcsColor = rcs >= 0.6 ? '#0EA5E9' : rcs >= 0.3 ? '#0284C7' : '#0369A1';
   const ccgColor = ccg >= 0.75 ? '#DC2626' : ccg >= 0.5 ? '#EA580C' : '#F59E0B';
+
+  const recs = getApparatusRecommendations(cell);
+  const statusColors = {
+    compliant: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/20',
+    warning: 'text-amber-700 bg-amber-500/10 border-amber-500/20',
+    restricted: 'text-rose-700 bg-rose-500/10 border-rose-500/20',
+  };
+
+  const statusIcons = {
+    compliant: CheckCircle,
+    warning: AlertTriangle,
+    restricted: Shield,
+  };
+
+  const StatusIcon = cell ? statusIcons[recs.compliance.status] : HelpCircle;
 
   return (
     <div className="space-y-3">
@@ -157,6 +174,50 @@ export function MetricCards({ cell }: MetricCardProps) {
           </div>
         </div>
       </div>
+
+      {/* Phase 2 Apparatus Dispatch Recommendations */}
+      {cell && (
+        <div className="glass-panel-light rounded-lg p-3 space-y-2.5 border border-ink-800/40">
+          <div className="flex items-center justify-between border-b border-ink-800/20 pb-1.5">
+            <span className="text-xs font-bold text-ink-200 uppercase tracking-wider">
+              NFPA-1 Apparatus Dispatch
+            </span>
+            <span className="rounded bg-heat-700/20 px-1.5 py-0.5 text-[8.5px] font-bold text-heat-500 uppercase">
+              Phase 2
+            </span>
+          </div>
+
+          {/* Compliance Banner */}
+          <div className={`flex items-start gap-2 rounded border p-2 text-[10px] ${statusColors[recs.compliance.status]}`}>
+            <StatusIcon className="h-4 w-4 shrink-0 mt-0.5 text-inherit" />
+            <div>
+              <strong className="block font-semibold text-inherit">{recs.compliance.label}</strong>
+              <span className="leading-normal text-inherit">{recs.compliance.description}</span>
+            </div>
+          </div>
+
+          {/* Apparatus List */}
+          <div className="space-y-1.5">
+            <span className="text-[9.5px] font-semibold text-ink-400 uppercase block">Recommended Deployment:</span>
+            {recs.apparatusList.map((item, idx) => (
+              <div key={idx} className="flex justify-between items-center bg-ink-900/40 rounded p-1.5 text-[10.5px]">
+                <div className="flex items-center gap-1.5">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-heat-600/25 text-[9px] font-bold text-heat-500">
+                    {item.count}x
+                  </span>
+                  <span className="text-ink-200 font-medium">{item.name}</span>
+                </div>
+                <span className="text-[8.5px] text-ink-500 italic max-w-[150px] text-right">{item.description}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between text-[9px] text-ink-500 border-t border-ink-800/20 pt-1.5">
+            <span>Dispatch Protocol: <strong className="text-ink-300">{recs.dispatchLevel} Response</strong></span>
+            <span>Ref: NFPA-1 Sect. 17.3</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

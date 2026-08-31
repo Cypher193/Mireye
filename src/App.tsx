@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { TopNav } from '@/components/TopNav';
-import { GoogleMap } from '@/components/GoogleMap';
+import { VisualizerBridge } from '@/components/VisualizerBridge';
 import { MetricCards } from '@/components/MetricCards';
 import { AIReasoningTrace } from '@/components/AIReasoningTrace';
 import { LocationSelector } from '@/components/LocationSelector';
@@ -30,6 +30,7 @@ function App() {
 
   // Map View Mode: 'usa' (National Map) or 'county' (Local Grid)
   const [viewMode, setViewMode] = useState<'usa' | 'county'>('usa');
+  const [visualizerMode, setVisualizerMode] = useState<'gis' | 'simulation'>('gis');
 
   // ── API state ──────────────────────────────────────────────────────────
   const [apiStatus, setApiStatus] = useState<ApiStatus>('idle');
@@ -223,13 +224,18 @@ function App() {
             <div className="my-4 border-t border-ink-800/50" />
 
             {/* Phase 2 Card */}
-            <Phase2Card isActive={phase2Active} onToggle={() => setPhase2Active((v) => !v)} />
+            <Phase2Card
+              isActive={phase2Active}
+              onToggle={() => setPhase2Active((v) => !v)}
+              cells={cells}
+              countyName={selectedCounty?.name ?? 'Unknown County'}
+            />
           </div>
         </aside>
 
         {/* Right — Map */}
         <main className="relative flex-1 overflow-hidden">
-          <GoogleMap
+          <VisualizerBridge
             cells={cells}
             usaCells={usaHexes}
             selectedId={selectedCell?.id ?? null}
@@ -240,6 +246,9 @@ function App() {
             onViewModeChange={setViewMode}
             connection={connectionStatus}
             isLoading={hexLoadStatus === 'loading'}
+            visualizerMode={visualizerMode}
+            onVisualizerModeChange={setVisualizerMode}
+            phase2Active={phase2Active}
           />
         </main>
       </div>

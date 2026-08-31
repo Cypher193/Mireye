@@ -27,6 +27,8 @@ export interface HexCell {
   lng?: number;
   nearestStationName?: string;
   nearestStationSource?: 'api' | 'fallback';
+  nearestStationLat?: number;
+  nearestStationLng?: number;
   mireyeLatencyMs?: number;
 }
 

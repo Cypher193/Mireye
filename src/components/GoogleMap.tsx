@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import type { HexCell, County } from '@/types';
+import * as THREE from 'three';
 import { COUNTIES } from '@/data/hexGrid';
 import { MapPin } from 'lucide-react';
 
@@ -14,6 +15,19 @@ interface GoogleMapProps {
   onViewModeChange: (mode: 'usa' | 'county') => void;
   connection: 'disconnected' | 'connecting' | 'connected' | 'loading' | 'error';
   isLoading?: boolean;
+  phase2Active: boolean;
+  cameraState?: {
+    center: { lat: number; lng: number };
+    zoom: number;
+    heading: number;
+    tilt: number;
+  };
+  onCameraChange?: (state: {
+    center: { lat: number; lng: number };
+    zoom: number;
+    heading: number;
+    tilt: number;
+  }) => void;
 }
 
 // Risk color mapping matching the CCG theme
@@ -64,6 +78,9 @@ export function GoogleMap({
   onViewModeChange,
   connection,
   isLoading = false,
+  phase2Active,
+  cameraState,
+  onCameraChange,
 }: GoogleMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -74,6 +91,24 @@ export function GoogleMap({
   const circlesRef = useRef<google.maps.Circle[]>([]);
   const markersRef = useRef<google.maps.Marker[]>([]);
   const geofencesRef = useRef<google.maps.Polygon[]>([]);
+
+  // Derived unique list of fire stations serving the county cells
+  const fireStations = useMemo(() => {
+    const stationsMap = new Map<string, { name: string; lat: number; lng: number }>();
+    cells.forEach((cell) => {
+      if (cell.nearestStationName && cell.nearestStationLat && cell.nearestStationLng) {
+        const key = `${cell.nearestStationName}_${cell.nearestStationLat.toFixed(5)}_${cell.nearestStationLng.toFixed(5)}`;
+        if (!stationsMap.has(key)) {
+          stationsMap.set(key, {
+            name: cell.nearestStationName,
+            lat: cell.nearestStationLat,
+            lng: cell.nearestStationLng,
+          });
+        }
+      }
+    });
+    return Array.from(stationsMap.values());
+  }, [cells]);
 
   // Load API script on mount
   useEffect(() => {
@@ -87,25 +122,29 @@ export function GoogleMap({
   useEffect(() => {
     if (!mapsLoaded || !containerRef.current || mapRef.current) return;
 
-    // Deep-slate dark style (used for hybrid/terrain mode features if switched, but satellite by default)
-    const darkStyle = [
-      { elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
-      { elementType: 'labels.text.fill', stylers: [{ color: '#94a3b8' }] },
-      { elementType: 'labels.text.stroke', stylers: [{ color: '#0f172a' }] },
-      { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#334155' }] },
-      { featureType: 'landscape', stylers: [{ color: '#0f172a' }] },
+    // Premium light map style matching the white/slate theme
+    const lightStyle = [
+      { elementType: 'geometry', stylers: [{ color: '#f8fafc' }] },
+      { elementType: 'labels.text.fill', stylers: [{ color: '#475569' }] },
+      { elementType: 'labels.text.stroke', stylers: [{ color: '#ffffff' }] },
+      { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#cbd5e1' }] },
+      { featureType: 'landscape', stylers: [{ color: '#f8fafc' }] },
       { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1e293b' }] },
-      { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#0f172a' }] },
-      { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#334155' }] },
-      { featureType: 'water', stylers: [{ color: '#1e1b4b' }] }
+      { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+      { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#e2e8f0' }] },
+      { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#f1f5f9' }] },
+      { featureType: 'water', stylers: [{ color: '#e0f2fe' }] }
     ];
 
     mapRef.current = new google.maps.Map(containerRef.current, {
-      center: { lat: 37.0902, lng: -95.7129 }, // Center of USA
-      zoom: 4,
-      mapTypeId: google.maps.MapTypeId.SATELLITE, // Default to satellite view
-      styles: darkStyle,
+      center: cameraState?.center ?? { lat: 37.0902, lng: -95.7129 },
+      zoom: cameraState?.zoom ?? 4,
+      heading: cameraState?.heading ?? 0,
+      tilt: cameraState?.tilt ?? 45,
+      mapTypeId: google.maps.MapTypeId.ROADMAP, // Light roadmap by default
+      mapId: 'DEMO_MAP_ID', // Enable Vector Rendering engine for WebGLOverlayView
+      renderingType: 'VECTOR',
+      styles: lightStyle,
       disableDefaultUI: false,
       mapTypeControl: true,
       mapTypeControlOptions: {
@@ -117,6 +156,162 @@ export function GoogleMap({
       fullscreenControl: true,
     });
   }, [mapsLoaded]);
+
+  // Bind camera change listeners to map
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !onCameraChange) return;
+
+    let timeoutId: number;
+
+    const onMapCameraChange = () => {
+      // Debounce updates to avoid excessive state setting
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        const center = map.getCenter();
+        onCameraChange({
+          center: { lat: center?.lat() ?? 37, lng: center?.lng() ?? -95 },
+          zoom: map.getZoom() ?? 4,
+          heading: map.getHeading() ?? 0,
+          tilt: map.getTilt() ?? 0,
+        });
+      }, 50);
+    };
+
+    const listeners = [
+      map.addListener('center_changed', onMapCameraChange),
+      map.addListener('zoom_changed', onMapCameraChange),
+      map.addListener('heading_changed', onMapCameraChange),
+      map.addListener('tilt_changed', onMapCameraChange),
+    ];
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      listeners.forEach((l) => l.remove());
+    };
+  }, [mapsLoaded, onCameraChange]);
+
+  // Update map camera settings when prop change is significant
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !cameraState) return;
+
+    const currentCenter = map.getCenter();
+    const latDiff = Math.abs((currentCenter?.lat() ?? 0) - cameraState.center.lat);
+    const lngDiff = Math.abs((currentCenter?.lng() ?? 0) - cameraState.center.lng);
+    const zoomDiff = Math.abs((map.getZoom() ?? 0) - cameraState.zoom);
+    const headingDiff = Math.abs((map.getHeading() ?? 0) - cameraState.heading);
+    const tiltDiff = Math.abs((map.getTilt() ?? 0) - cameraState.tilt);
+
+    if (latDiff > 0.0001 || lngDiff > 0.0001 || zoomDiff > 0.1 || headingDiff > 1 || tiltDiff > 1) {
+      map.setOptions({
+        center: cameraState.center,
+        zoom: cameraState.zoom,
+        heading: cameraState.heading,
+        tilt: cameraState.tilt,
+      });
+    }
+  }, [cameraState]);
+
+  // Method 1: WebGLOverlayView rendering a 3D tactical cone on selected/high-risk hotspots
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapsLoaded) return;
+
+    let overlay: google.maps.WebGLOverlayView | null = null;
+    let scene: THREE.Scene | null = null;
+    let camera: THREE.PerspectiveCamera | null = null;
+    let renderer: THREE.WebGLRenderer | null = null;
+    const meshGroup = new THREE.Group();
+
+    overlay = new google.maps.WebGLOverlayView();
+
+    overlay.onAdd = () => {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera();
+      
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+      scene.add(ambientLight);
+      
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      dirLight.position.set(0, 10, 0);
+      scene.add(dirLight);
+
+      scene.add(meshGroup);
+    };
+
+    overlay.onContextRestored = ({ gl }) => {
+      renderer = new THREE.WebGLRenderer({
+        canvas: gl.canvas,
+        context: gl,
+        antialias: true,
+      });
+      renderer.autoClear = false;
+    };
+
+    overlay.onRemove = () => {
+      // Clean up ThreeJS renderer and materials on unmount/removal
+      if (renderer) {
+        renderer.dispose();
+      }
+    };
+
+    overlay.onDraw = ({ transformer }) => {
+      if (!scene || !camera || !renderer) return;
+
+      meshGroup.clear();
+
+      if (viewMode === 'county' && cells.length > 0) {
+        cells.forEach((cell) => {
+          if (cell.lat === undefined || cell.lng === undefined) return;
+
+          // For the selected hex, display a rotating tactical wireframe cone
+          if (cell.id === selectedId) {
+            const geometry = new THREE.ConeGeometry(300, 800, 6);
+            const material = new THREE.MeshBasicMaterial({
+              color: 0xf59e0b, // Amber glow matching elevated risk
+              wireframe: true,
+              transparent: true,
+              opacity: 0.8,
+            });
+            const cone = new THREE.Mesh(geometry, material);
+
+            const position = transformer.fromLatLngAltitude({
+              lat: cell.lat,
+              lng: cell.lng,
+              altitude: 400, // Position centroid above terrain
+            });
+
+            cone.position.set(position[0], position[1], position[2]);
+            cone.rotation.y = (Date.now() * 0.001) % (Math.PI * 2);
+            cone.rotation.x = Math.PI; // Invert to point downwards like a target locator
+            meshGroup.add(cone);
+          }
+        });
+      }
+
+      // Synchronize ThreeJS camera projections if vector engine parameters are ready
+      const camParams = transformer.getCameraParams() as any;
+      if (camParams && camParams.projectionMatrix && camParams.viewMatrix) {
+        camera.projectionMatrix.fromArray(camParams.projectionMatrix);
+        camera.matrixWorldInverse.fromArray(camParams.viewMatrix);
+        camera.matrixWorld.copy(camera.matrixWorldInverse).invert();
+      }
+
+      renderer.resetState();
+      renderer.render(scene, camera);
+      
+      overlay?.requestRedraw();
+    };
+
+    overlay.setMap(map);
+
+    return () => {
+      if (overlay) {
+        overlay.setMap(null);
+      }
+    };
+  }, [viewMode, cells, selectedId, mapsLoaded]);
 
   // Handle updates to Map ViewMode (zoom and center)
   useEffect(() => {
@@ -282,7 +477,7 @@ export function GoogleMap({
             fillColor: '#EF4444',
             fillOpacity: 0.15,
             map: cell.ccg >= 0.7 ? map : null, // render if active geofence
-            visible: false, // controlled by phase2Active in parent, we'll bind visibility
+            visible: phase2Active, // Bind visibility to phase2Active state
           });
 
           geofencesRef.current.push(geofence);
@@ -290,30 +485,30 @@ export function GoogleMap({
       });
 
       // Render Fire Stations within county as markers
-      const stationCells = cells.filter((c) => c.staffedStations > 0 && c.rcs > 0.5);
-      stationCells.slice(0, 8).forEach((stationCell, i) => {
-        if (stationCell.lat === undefined || stationCell.lng === undefined) return;
-
-        // Custom blue icon marker representing USFA station
+      fireStations.forEach((station) => {
+        // Custom marker representing USFA station
         const marker = new google.maps.Marker({
-          position: { lat: stationCell.lat, lng: stationCell.lng },
+          position: { lat: station.lat, lng: station.lng },
           map,
-          title: stationCell.nearestStationName || 'Staffed USFA Station',
+          title: station.name,
           icon: {
             path: 'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z',
-            fillColor: '#38BDF8', // Calm utility blue
+            fillColor: '#0EA5E9', // Slate-blue beacon
             fillOpacity: 1.0,
-            strokeColor: '#0F172A',
+            strokeColor: '#FFFFFF',
             strokeWeight: 1.5,
             scale: 1.2,
             anchor: new google.maps.Point(12, 24),
           },
         });
 
+        // Store station name on marker for hover listener mapping
+        (marker as any).stationName = station.name;
+
         google.maps.event.addListener(marker, 'click', () => {
           const infoWindow = new google.maps.InfoWindow({
             content: `<div class="p-2 text-xs font-sans text-slate-800">
-              <strong class="block mb-1 text-slate-900">${stationCell.nearestStationName || 'USFA Fire Station'}</strong>
+              <strong class="block mb-1 text-slate-900">${station.name}</strong>
               <span>Staffed USFA registered facility providing primary response area coverage.</span>
             </div>`,
           });
@@ -325,7 +520,31 @@ export function GoogleMap({
     }
 
     return () => clearOverlays();
-  }, [viewMode, cells, usaCells, selectedId, hoveredId, mapsLoaded]);
+  }, [viewMode, cells, usaCells, selectedId, hoveredId, mapsLoaded, fireStations, phase2Active]);
+
+  // Highlight and animate nearest fire station marker on cell hover
+  useEffect(() => {
+    const activeHoveredCell = cells.find((c) => c.id === hoveredId);
+    markersRef.current.forEach((marker) => {
+      const stationName = (marker as any).stationName;
+      if (activeHoveredCell && activeHoveredCell.nearestStationName === stationName) {
+        // Highlight nearest station by bouncing
+        marker.setAnimation(google.maps.Animation.BOUNCE);
+        // Show response time label overlay
+        const time = activeHoveredCell.driveTimeMin.toFixed(1);
+        marker.setLabel({
+          text: `${time} min`,
+          color: '#EA580C',
+          fontWeight: 'bold',
+          fontSize: '11px',
+        });
+      } else {
+        // Reset marker animation and label
+        marker.setAnimation(null);
+        marker.setLabel(null);
+      }
+    });
+  }, [hoveredId, cells]);
 
   // Hovered Cell computed details
   const hoveredCell = useMemo(() => {
