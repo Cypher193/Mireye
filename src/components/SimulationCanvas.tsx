@@ -71,6 +71,7 @@ export function SimulationCanvas({
   const cellMeshesRef = useRef<{ id: string; cylinder: THREE.Mesh; ring: THREE.Mesh; baseColor: number }[]>([]);
   const historicalLineGroupRef = useRef<THREE.Group | null>(null);
   const historicalLocalPointsRef = useRef<THREE.Vector3[]>([]);
+  const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
 
   // Derived unique list of fire stations serving the county cells
   const fireStations = useMemo(() => {
@@ -163,9 +164,12 @@ export function SimulationCanvas({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.maxPolarAngle = Math.PI / 2.1; // Don't go below ground
-    controls.minDistance = 200;
-    controls.maxDistance = 15000;
+    controls.rotateSpeed = 1.0;
+    controls.zoomSpeed = 1.2;
+    controls.panSpeed = 0.8;
+    controls.maxPolarAngle = Math.PI / 2.15; // Don't go below ground level
+    controls.minDistance = 150; // Allow zooming in closer
+    controls.maxDistance = 20000;
     controlsRef.current = controls;
 
     // Bind change listener for camera updates
@@ -497,6 +501,9 @@ export function SimulationCanvas({
     const animate = () => {
       tiles.update();
 
+      // Smoothly pan camera target to selection
+      controls.target.lerp(targetLookAtRef.current, 0.08);
+
       // Highlight and animate nearest fire station beacon based on cell hover status
       const hoveredCellObj = cellsRef.current.find((c) => c.id === hoveredIdRef.current);
       const hoveredStationName = hoveredCellObj?.nearestStationName;
@@ -577,7 +584,49 @@ export function SimulationCanvas({
       }
       tiles.dispose();
     };
-  }, [cells, selectedCell, fireStations]);
+  }, [cells, fireStations]);
+
+  // Synchronize selection changes (color highlighting & camera panning) without rebuilding the canvas
+  useEffect(() => {
+    // 1. Update target look-at vector for camera focus panning
+    if (selectedCell && cells.length > 0) {
+      const pos = cellPositionsRef.current[selectedCell.id];
+      if (pos) {
+        targetLookAtRef.current.copy(pos);
+      }
+    } else {
+      targetLookAtRef.current.set(0, 0, 0);
+    }
+
+    // 2. Update grid cell selection highlight colors dynamically
+    cellMeshesRef.current.forEach((mesh) => {
+      const isSelected = mesh.id === selectedCell?.id;
+      (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
+      (mesh.ring.material as THREE.MeshBasicMaterial).opacity = isSelected ? 1.0 : 0.65;
+    });
+
+    // 3. Reset particle systems centered around the new selection (if not currently playing)
+    const fireGeom = fireGeometryRef.current;
+    const smokeGeom = smokeGeometryRef.current;
+    if (selectedCell && fireGeom && smokeGeom && !isPlaying) {
+      const pos = cellPositionsRef.current[selectedCell.id];
+      if (pos) {
+        const firePos = fireGeom.attributes.position.array as Float32Array;
+        const smokePos = smokeGeom.attributes.position.array as Float32Array;
+        for (let i = 0; i < particleCount; i++) {
+          firePos[i * 3] = pos.x + (Math.random() - 0.5) * 100;
+          firePos[i * 3 + 1] = pos.y + Math.random() * 50;
+          firePos[i * 3 + 2] = pos.z + (Math.random() - 0.5) * 100;
+
+          smokePos[i * 3] = pos.x + (Math.random() - 0.5) * 100;
+          smokePos[i * 3 + 1] = pos.y + Math.random() * 100;
+          smokePos[i * 3 + 2] = pos.z + (Math.random() - 0.5) * 100;
+        }
+        fireGeom.attributes.position.needsUpdate = true;
+        smokeGeom.attributes.position.needsUpdate = true;
+      }
+    }
+  }, [selectedCell, cells, isPlaying]);
 
   // Handle fire propagation animations on simState change
   useEffect(() => {
