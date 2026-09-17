@@ -1,0 +1,24 @@
+# Files and directories that AI agents should ignore to prevent token context exhaustion
+
+# Build & compiled output
+dist/
+dist-ssr/
+build/
+*.local
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# System & dependencies
+node_modules/
+.git/
+
+# Static geometry / SVG datasets (pure coordinates, zero logic)
+src/components/USAMapPaths.ts
+
+# Legacy / superseded prototypes & raw research
+Coverage_Combustibility_Gap_Technical_Approach (1).docx
+*.timestamp-*.mjs
+*.log

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TilesRenderer } from '3d-tiles-renderer';
 import type { HexCell } from '@/types';
-import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers } from 'lucide-react';
+import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers, CloudSun, RefreshCw } from 'lucide-react';
 import { getHistoricalFire } from '@/data/historicalFires';
 import { computePredictiveSpread } from '@/lib/predictiveSim';
 
@@ -108,18 +108,73 @@ export function SimulationCanvas({
   const [windAngle, setWindAngle] = useState(45); // Degrees (0 = North, 90 = East)
   const [windSpeed, setWindSpeed] = useState(15); // mph
 
-  // Particle systems for fire/smoke simulation
-  const fireParticlesRef = useRef<THREE.Points | null>(null);
-  const smokeParticlesRef = useRef<THREE.Points | null>(null);
-  const fireGeometryRef = useRef<THREE.BufferGeometry | null>(null);
-  const smokeGeometryRef = useRef<THREE.BufferGeometry | null>(null);
-  const particleCount = 800;
+  // Real-time meteorological data (Open-Meteo / NOAA surface data)
+  const [isFetchingWeather, setIsFetchingWeather] = useState(false);
+  const [weatherData, setWeatherData] = useState<{
+    temperatureF?: number;
+    humidity?: number;
+    windSpeedMph?: number;
+    windDirection?: number;
+    lastUpdated?: string;
+  } | null>(null);
 
   // Track coordinates for current county center
   const centerCoord = {
     lat: selectedCell?.lat ?? 37.7749,
     lng: selectedCell?.lng ?? -122.4194,
   };
+
+  const fetchLiveWeather = useCallback(async () => {
+    const lat = selectedCell?.lat ?? centerCoord.lat;
+    const lng = selectedCell?.lng ?? centerCoord.lng;
+    if (lat === undefined || lng === undefined) return;
+
+    setIsFetchingWeather(true);
+    try {
+      const res = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m&temperature_unit=fahrenheit&wind_speed_unit=mph`
+      );
+      if (!res.ok) throw new Error(`Weather API returned ${res.status}`);
+      const data = (await res.json()) as {
+        current?: {
+          temperature_2m?: number;
+          relative_humidity_2m?: number;
+          wind_speed_10m?: number;
+          wind_direction_10m?: number;
+        };
+      };
+      if (data.current) {
+        const cur = data.current;
+        const spd = Math.round(cur.wind_speed_10m ?? 15);
+        const dir = Math.round(cur.wind_direction_10m ?? 45);
+        setWindSpeed(spd);
+        setWindAngle(dir);
+        setWeatherData({
+          temperatureF: Math.round(cur.temperature_2m ?? 70),
+          humidity: Math.round(cur.relative_humidity_2m ?? 40),
+          windSpeedMph: spd,
+          windDirection: dir,
+          lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
+    } catch (err) {
+      console.warn('[SimulationCanvas] Live weather fetch failed:', err);
+    } finally {
+      setIsFetchingWeather(false);
+    }
+  }, [selectedCell?.lat, selectedCell?.lng, centerCoord.lat, centerCoord.lng]);
+
+  // Automatically fetch live weather whenever county/selected hex changes
+  useEffect(() => {
+    fetchLiveWeather();
+  }, [selectedCell?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Particle systems for fire/smoke simulation
+  const fireParticlesRef = useRef<THREE.Points | null>(null);
+  const smokeParticlesRef = useRef<THREE.Points | null>(null);
+  const fireGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const smokeGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const particleCount = 800;
 
   // Initializing three.js
   useEffect(() => {
@@ -955,8 +1010,41 @@ export function SimulationCanvas({
           </div>
         </div>
 
+        {/* Real-time Meteorology Header */}
+        <div className="border-t border-ink-850 pt-3 pb-1">
+          <div className="flex items-center justify-between mb-2">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-200">
+              <CloudSun className="h-3.5 w-3.5 text-amber-400" />
+              Live Weather Feed
+            </span>
+            <button
+              onClick={fetchLiveWeather}
+              disabled={isFetchingWeather}
+              className="flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 disabled:opacity-50 transition-colors"
+              title="Sync latest NOAA / Open-Meteo surface conditions"
+            >
+              <RefreshCw className={`h-2.5 w-2.5 ${isFetchingWeather ? 'animate-spin' : ''}`} />
+              <span>{isFetchingWeather ? 'Syncing...' : 'Sync'}</span>
+            </button>
+          </div>
+
+          {weatherData ? (
+            <div className="flex items-center justify-between rounded bg-ink-900/60 px-2 py-1 text-[10px] text-ink-400 mb-2 border border-ink-800/40">
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{weatherData.temperatureF}°F · {weatherData.humidity}% RH</span>
+              </span>
+              <span className="text-[9px] text-ink-500 font-mono">{weatherData.lastUpdated}</span>
+            </div>
+          ) : (
+            <div className="text-[10px] text-ink-500 mb-2 italic">
+              Connecting to live surface telemetry...
+            </div>
+          )}
+        </div>
+
         {/* Wind controls */}
-        <div className="space-y-3 border-t border-ink-850 pt-3">
+        <div className="space-y-3 border-t border-ink-850/60 pt-2">
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-1.5 text-ink-400">
               <Wind className="h-3.5 w-3.5 text-sky-400" /> Wind Angle
