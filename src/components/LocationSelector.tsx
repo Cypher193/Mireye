@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, MapPin, Check, Loader2 } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { ChevronDown, MapPin, Check, Loader2, Search } from 'lucide-react';
 import type { County } from '@/types';
 
 interface LocationSelectorProps {
@@ -17,7 +17,9 @@ export function LocationSelector({
   isLoading = false,
 }: LocationSelectorProps) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -29,11 +31,30 @@ export function LocationSelector({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+    } else {
+      setSearch('');
+    }
+  }, [open]);
+
+  const filteredCounties = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return counties;
+    return counties.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.state.toLowerCase().includes(q) ||
+        (c.cityName && c.cityName.toLowerCase().includes(q))
+    );
+  }, [counties, search]);
+
   return (
     <div ref={ref} className="relative">
       <div className="mb-1.5 flex items-center justify-between">
         <label className="block text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-          Select County / District
+          Select State / County ({counties.length} Available)
         </label>
         {isLoading && (
           <span className="flex items-center gap-1 text-[9px] text-amber-400">
@@ -55,9 +76,12 @@ export function LocationSelector({
             <MapPin className="h-4 w-4 text-heat-500" />
           )}
           <div>
-            <div className="text-sm font-semibold text-ink-100">{selected.name}</div>
+            <div className="text-sm font-semibold text-ink-100">
+              {selected.name}, {selected.state}
+            </div>
             <div className="text-[9px] text-ink-500">
-              {selected.state} · {selected.wuiHousingUnits.toLocaleString()} WUI units ·{' '}
+              {selected.cityName ? `${selected.cityName} · ` : ''}
+              {selected.wuiHousingUnits.toLocaleString()} WUI units ·{' '}
               {selected.fireDistricts} districts
               {selected.lat && (
                 <span className="ml-1 text-emerald-500">
@@ -73,27 +97,56 @@ export function LocationSelector({
       </button>
 
       {open && (
-        <div className="absolute z-20 mt-1.5 w-full overflow-hidden rounded-lg border border-ink-700 bg-ink-850 shadow-xl shadow-black/40 animate-slide-down">
-          {counties.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => {
-                onSelect(c);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-ink-800 ${
-                c.id === selected.id ? 'bg-ink-800/50' : ''
-              }`}
-            >
-              <div>
-                <div className="text-sm font-medium text-ink-100">{c.name}</div>
-                <div className="text-[9px] text-ink-500">
-                  {c.state} · {c.wuiHousingUnits.toLocaleString()} WUI units
-                </div>
+        <div className="absolute z-30 mt-1.5 w-full overflow-hidden rounded-lg border border-ink-700 bg-ink-850 shadow-2xl shadow-black/60 animate-slide-down">
+          {/* Search filter input */}
+          <div className="border-b border-ink-800 p-2">
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 h-3.5 w-3.5 text-ink-500" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search state, county, or city..."
+                className="w-full rounded-md border border-ink-700 bg-ink-900 py-1.5 pl-8 pr-3 text-xs text-ink-200 placeholder-ink-500 focus:border-heat-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto divide-y divide-ink-800/40">
+            {filteredCounties.length === 0 ? (
+              <div className="p-3 text-center text-xs text-ink-500">
+                No matching regions found for "{search}"
               </div>
-              {c.id === selected.id && <Check className="h-3.5 w-3.5 text-heat-500" />}
-            </button>
-          ))}
+            ) : (
+              filteredCounties.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => {
+                    onSelect(c);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-ink-800 ${
+                    c.id === selected.id ? 'bg-ink-800/50' : ''
+                  }`}
+                >
+                  <div>
+                    <div className="text-xs font-semibold text-ink-100">
+                      {c.name}{' '}
+                      <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[9px] text-sky-400">
+                        {c.state}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-ink-500">
+                      {c.cityName ? `${c.cityName} · ` : ''}
+                      {c.wuiHousingUnits.toLocaleString()} WUI units
+                    </div>
+                  </div>
+                  {c.id === selected.id && <Check className="h-3.5 w-3.5 text-heat-500" />}
+                </button>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>

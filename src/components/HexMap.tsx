@@ -192,18 +192,26 @@ export function HexMap({
           <>
             <g className="usa-states-group">
               {USA_STATE_PATHS.map((state) => {
-                const hasPilot = ['co', 'az', 'ca', 'or', 'mt', 'tx', 'ga'].includes(state.id);
+                const county = COUNTIES.find((c) => c.state.toLowerCase() === state.id);
                 return (
                   <path
                     key={state.id}
                     d={state.d}
-                    fill={hasPilot ? 'rgba(30, 58, 95, 0.25)' : 'url(#ccg-hatch)'}
-                    stroke={hasPilot ? '#334155' : '#1e293b'}
-                    strokeWidth={hasPilot ? 1.0 : 0.6}
-                    className="transition-all duration-300 hover:fill-ink-800/40"
+                    fill="rgba(30, 58, 95, 0.25)"
+                    stroke="#334155"
+                    strokeWidth={0.8}
+                    className="transition-all duration-300 hover:fill-heat-900/30 hover:stroke-heat-500/60 cursor-pointer"
+                    onClick={() => {
+                      if (county) {
+                        const cell = usaCells.find((c) => c.region === county.id);
+                        if (cell) onSelect(cell);
+                      }
+                    }}
                     onMouseEnter={() => setHoveredBase(true)}
                     onMouseLeave={() => setHoveredBase(false)}
-                  />
+                  >
+                    <title>{state.name} — {county?.name ?? 'WUI Region'}</title>
+                  </path>
                 );
               })}
             </g>
