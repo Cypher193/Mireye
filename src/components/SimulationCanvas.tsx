@@ -3,9 +3,21 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TilesRenderer } from '3d-tiles-renderer';
 import type { HexCell } from '@/types';
-import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers, CloudSun, RefreshCw } from 'lucide-react';
+import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers, CloudSun, RefreshCw, Zap, Cpu, Database } from 'lucide-react';
 import { getHistoricalFire } from '@/data/historicalFires';
 import { computePredictiveSpread } from '@/lib/predictiveSim';
+import {
+  loadCachedSatelliteTexture,
+  getCachedTerrainGeometry,
+  setCachedTerrainGeometry,
+  RenderController,
+} from '@/services/renderCache';
+import {
+  getWebGPUStatus,
+  createWebGPUParticlePipeline,
+  type WebGPUStatus,
+  type WebGPUParticlePipeline,
+} from '@/services/webGpuCompute';
 
 interface SimulationCanvasProps {
   cells: HexCell[];
@@ -99,6 +111,17 @@ export function SimulationCanvas({
   const historicalLocalPointsRef = useRef<THREE.Vector3[]>([]);
   const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
   const isPanningToTargetRef = useRef<boolean>(false);
+
+  // WebGPU & 3D Render Caching Telemetry
+  const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus | null>(null);
+  const [isSatelliteCached, setIsSatelliteCached] = useState<boolean>(false);
+  const webgpuPipelineRef = useRef<WebGPUParticlePipeline | null>(null);
+  const renderControllerRef = useRef<RenderController>(new RenderController());
+
+  // Detect WebGPU hardware adapter on mount
+  useEffect(() => {
+    getWebGPUStatus().then(setWebgpuStatus);
+  }, []);
 
   // Derived unique list of fire stations serving the county cells
   const fireStations = useMemo(() => {
@@ -258,10 +281,16 @@ export function SimulationCanvas({
     // Immediately stop programmatic lerping when the user initiates manual interaction
     controls.addEventListener('start', () => {
       isPanningToTargetRef.current = false;
+      renderControllerRef.current.keepAlive(30);
+    });
+
+    controls.addEventListener('change', () => {
+      renderControllerRef.current.markDirty();
     });
 
     // Notify camera change on user interaction end to avoid 60fps render thrashing
     controls.addEventListener('end', () => {
+      renderControllerRef.current.markDirty();
       if (onCameraChange) {
         const localVec = camera.position.clone().sub(controls.target);
         onCameraChange({
@@ -331,19 +360,26 @@ export function SimulationCanvas({
       return h1 + h2 + h3;
     };
 
-    // Create 3D topography plane with elevation harmonics
-    const terrainGeom = new THREE.PlaneGeometry(terrainWidth, terrainDepth, 120, 120);
-    terrainGeom.rotateX(-Math.PI / 2); // Rotate to horizontal XZ plane
+    // Tier 2 Cache: Check Topography Geometry Memory Pool
+    const countyId = selectedCell?.region ?? cells[0]?.region ?? 'county';
+    const geomCacheKey = `${countyId}_${terrainWidth.toFixed(0)}_${terrainDepth.toFixed(0)}`;
+    let terrainGeom = getCachedTerrainGeometry(geomCacheKey);
 
-    const posAttr = terrainGeom.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-      const vx = posAttr.getX(i);
-      const vz = posAttr.getZ(i);
-      const wx = midX + vx;
-      const wz = midZ + vz;
-      posAttr.setY(i, getTerrainElevation(wx, wz) - 15);
+    if (!terrainGeom) {
+      terrainGeom = new THREE.PlaneGeometry(terrainWidth, terrainDepth, 120, 120);
+      terrainGeom.rotateX(-Math.PI / 2); // Rotate to horizontal XZ plane
+
+      const posAttr = terrainGeom.attributes.position;
+      for (let i = 0; i < posAttr.count; i++) {
+        const vx = posAttr.getX(i);
+        const vz = posAttr.getZ(i);
+        const wx = midX + vx;
+        const wz = midZ + vz;
+        posAttr.setY(i, getTerrainElevation(wx, wz) - 15);
+      }
+      terrainGeom.computeVertexNormals();
+      setCachedTerrainGeometry(geomCacheKey, terrainGeom);
     }
-    terrainGeom.computeVertexNormals();
 
     // Standard PBR Terrain Material
     const terrainMat = new THREE.MeshStandardMaterial({
@@ -354,26 +390,23 @@ export function SimulationCanvas({
       flatShading: false,
     });
 
-    // Fetch and drape high-resolution aerial satellite imagery (ESRI World Imagery Export)
+    // Tier 1 Cache: Check IndexedDB for cached aerial satellite imagery before fetching from ESRI
     const satelliteUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}&bboxSR=4326&imageSR=4326&size=2048,2048&f=image`;
-    const textureLoader = new THREE.TextureLoader();
-    textureLoader.crossOrigin = 'anonymous';
-    textureLoader.load(
-      satelliteUrl,
-      (tex) => {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.generateMipmaps = true;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        terrainMat.map = tex;
+    const textureCacheKey = `esri_${bbox.minLng}_${bbox.minLat}_${bbox.maxLng}_${bbox.maxLat}`;
+
+    loadCachedSatelliteTexture(satelliteUrl, textureCacheKey)
+      .then(({ texture, fromCache }) => {
+        terrainMat.map = texture;
         terrainMat.needsUpdate = true;
-      },
-      undefined,
-      (err) => {
+        setIsSatelliteCached(fromCache);
+        renderControllerRef.current.keepAlive(40);
+      })
+      .catch((err) => {
         console.warn('[SimulationCanvas] Satellite imagery fetch failed, using digital twin fallback:', err);
         terrainMat.color.setHex(0x1e293b);
         terrainMat.needsUpdate = true;
-      }
-    );
+        renderControllerRef.current.keepAlive(10);
+      });
 
     const terrainMesh = new THREE.Mesh(terrainGeom, terrainMat);
     terrainMesh.position.set(midX, 0, midZ);
@@ -486,7 +519,6 @@ export function SimulationCanvas({
 
     // 8.6. Render Historical Fire Footprint Outline (Option A)
     const historicalLineGroup = new THREE.Group();
-    const countyId = selectedCell?.region ?? cells[0]?.region ?? 'boulder-co';
     const historicalFire = getHistoricalFire(countyId);
 
     if (historicalFire && historicalFire.boundary.length > 0) {
@@ -605,6 +637,14 @@ export function SimulationCanvas({
     fireGeometry.setAttribute('position', new THREE.BufferAttribute(firePositions, 3));
     fireGeometry.setAttribute('color', new THREE.BufferAttribute(fireColors, 3));
     fireGeometryRef.current = fireGeometry;
+
+    // Initialize WebGPU particle compute pipeline if hardware acceleration is available
+    createWebGPUParticlePipeline(particleCount, firePositions).then((pipeline) => {
+      webgpuPipelineRef.current = pipeline;
+      if (pipeline) {
+        console.log('[SimulationCanvas] WebGPU particle compute pipeline initialized successfully.');
+      }
+    });
 
     // Use built-in round particle texture creation
     const canvas = document.createElement('canvas');
@@ -753,11 +793,15 @@ export function SimulationCanvas({
         }
       }
 
-      // Slow orbit rotation or updating controls
-      controls.update();
-
-      // Render frames
-      renderer.render(scene, camera);
+      // Render frames only on-demand or during active motion to save GPU power
+      if (
+        isPanningToTargetRef.current ||
+        isPlaying ||
+        renderControllerRef.current.shouldRender()
+      ) {
+        controls.update();
+        renderer.render(scene, camera);
+      }
       animationFrameRef.current = requestAnimationFrame(animate);
     };
 
@@ -771,6 +815,7 @@ export function SimulationCanvas({
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      renderControllerRef.current.keepAlive(10);
     };
 
     window.addEventListener('resize', handleResize);
@@ -780,6 +825,10 @@ export function SimulationCanvas({
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
+      }
+      if (webgpuPipelineRef.current) {
+        webgpuPipelineRef.current.destroy();
+        webgpuPipelineRef.current = null;
       }
       tiles.dispose();
     };
@@ -896,35 +945,41 @@ export function SimulationCanvas({
       const dz = -Math.cos(radWind) * windSpeed * 1.5; // Wind vector translation
 
       const origin = new THREE.Vector3(0, 0, 0);
-      if (selectedCell && selectedCell.lat !== undefined && selectedCell.lng !== undefined) {
-        const poiECEF = latLngToECEF(centerCoord.lat, centerCoord.lng, 0);
-        const normal = poiECEF.clone().normalize();
-        const up = new THREE.Vector3(0, 1, 0);
-        const quaternion = new THREE.Quaternion().setFromUnitVectors(normal, up);
-        const offset = poiECEF.clone().applyQuaternion(quaternion).negate();
-
-        const selECEF = latLngToECEF(selectedCell.lat ?? 0, selectedCell.lng ?? 0, 0);
-        const localPos = selECEF.applyQuaternion(quaternion).add(offset);
-        origin.copy(localPos);
+      if (selectedCell && cellPositionsRef.current[selectedCell.id]) {
+        origin.copy(cellPositionsRef.current[selectedCell.id]);
       }
 
-      if (fireGeom) {
+      // Find emitter origin
+      let emitterPos = origin;
+      if (simModeRef.current === 'predictive' && burningCells.length > 0) {
+        const rc = burningCells[Math.floor(Math.random() * burningCells.length)];
+        const pos = cellPositionsRef.current[rc.id];
+        if (pos) emitterPos = pos;
+      } else if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
+        const pt = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
+        emitterPos = pt;
+      }
+
+      renderControllerRef.current.keepAlive(10);
+
+      // WebGPU Compute Pipeline Execution
+      const pipeline = webgpuPipelineRef.current;
+      if (pipeline) {
+        pipeline.dispatch(windAngle, windSpeed, emitterPos.x, emitterPos.y, emitterPos.z, 0.05, time).then((gpuPositions) => {
+          if (gpuPositions && fireGeom) {
+            const positions = fireGeom.attributes.position.array as Float32Array;
+            positions.set(gpuPositions);
+            fireGeom.attributes.position.needsUpdate = true;
+            renderControllerRef.current.keepAlive(5);
+          }
+        });
+      } else if (fireGeom) {
+        // CPU fallback particle physics
         const positions = fireGeom.attributes.position.array as Float32Array;
         for (let i = 0; i < particleCount; i++) {
           positions[i * 3 + 1] += 4 + Math.random() * 8; // vertical float
           positions[i * 3] += dx * 0.2 + (Math.random() - 0.5) * 20; // wind drift X
           positions[i * 3 + 2] += dz * 0.2 + (Math.random() - 0.5) * 20; // wind drift Z
-
-          // Find emitter origin
-          let emitterPos = origin;
-          if (simModeRef.current === 'predictive' && burningCells.length > 0) {
-            const rc = burningCells[Math.floor(Math.random() * burningCells.length)];
-            const pos = cellPositionsRef.current[rc.id];
-            if (pos) emitterPos = pos;
-          } else if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
-            const pt = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
-            emitterPos = pt;
-          }
 
           // Reset particle if too high
           if (positions[i * 3 + 1] > emitterPos.y + 400 + Math.random() * 200) {
@@ -1061,11 +1116,40 @@ export function SimulationCanvas({
           </h2>
         </div>
 
-        {/* High-Resolution Satellite 3D Terrain Active Badge */}
+        {/* WebGPU Hardware Acceleration Telemetry Badge */}
+        <div className="mb-2.5 flex items-center justify-between rounded border border-ink-850 bg-ink-900/70 px-2.5 py-1.5 text-[10px]">
+          <div className="flex items-center gap-1.5">
+            {webgpuStatus?.supported ? (
+              <>
+                <Zap className="h-3 w-3 text-emerald-400 fill-emerald-400/20" />
+                <span className="font-bold text-emerald-300">WebGPU Hardware Active</span>
+              </>
+            ) : (
+              <>
+                <Cpu className="h-3 w-3 text-cool-400" />
+                <span className="font-bold text-ink-300">WebGL 2.0 Fallback</span>
+              </>
+            )}
+          </div>
+          {webgpuStatus?.architecture && (
+            <span className="font-mono text-[9px] text-ink-400 truncate max-w-[110px]" title={webgpuStatus.adapterName}>
+              {webgpuStatus.architecture}
+            </span>
+          )}
+        </div>
+
+        {/* High-Resolution Satellite 3D Terrain Active Badge with IndexedDB Cache Indicator */}
         <div className="mb-3 rounded border border-emerald-800/60 bg-emerald-950/40 p-2 text-[10px] text-emerald-300 leading-normal flex items-start gap-2">
           <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 mt-1 shrink-0 animate-pulse" />
           <div>
-            <span className="font-bold uppercase block text-emerald-200">Satellite 3D Ortho Terrain Active</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold uppercase text-emerald-200">Satellite 3D Ortho Terrain</span>
+              {isSatelliteCached && (
+                <span className="inline-flex items-center gap-0.5 rounded bg-emerald-900/70 border border-emerald-700/50 px-1 py-0.5 text-[8.5px] font-mono text-emerald-300">
+                  <Database className="h-2.5 w-2.5" /> Cached (IndexedDB)
+                </span>
+              )}
+            </div>
             Draped with real-time ESRI High-Resolution Ortho-Imagery across regional topography.
           </div>
         </div>
