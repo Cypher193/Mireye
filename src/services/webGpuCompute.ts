@@ -3,9 +3,11 @@
  *
  * Implements native WGSL compute shaders for:
  * 1. 3D Particle Dynamics (convective thermal buoyancy, 3D turbulent wind advection, ember lifecycles)
- * 2. Rothermel Fire Propagation calculations across grid cells in parallel
+ * 2. Rothermel / FireSenseNet Fire Propagation calculations across grid cells in parallel
  * 3. Hardware detection and capability telemetry with automatic WebGL fallback
  */
+
+import type { HexCell } from '@/types';
 
 export interface WebGPUStatus {
   supported: boolean;
@@ -13,6 +15,7 @@ export interface WebGPUStatus {
   vendor?: string;
   architecture?: string;
   maxComputeWorkgroupSizeX?: number;
+  lastComputeLatencyMs?: number;
   error?: string;
 }
 
@@ -86,7 +89,7 @@ export async function getGPUDevice(): Promise<GPUDevice | null> {
   }
 }
 
-// ── WGSL Compute Shader Source ────────────────────────────────────────────────
+// ── 1. WGSL Compute Shader for 3D Particle Dynamics ──────────────────────────
 const PARTICLE_COMPUTE_WGSL = `
 struct Particle {
   pos: vec4<f32>, // x, y, z, life
@@ -118,10 +121,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
   var p = particles[idx];
 
-  // Convective thermal buoyancy + wind translation
-  let lift = (3.0 + hash(f32(idx) + params.time) * 4.0) * params.deltaTime * 60.0;
-  let windDriftX = (params.windVector.x * params.windVector.w * 0.35 + (hash(f32(idx) * 1.37 + params.time) - 0.5) * 18.0) * params.deltaTime * 60.0;
-  let windDriftZ = (params.windVector.z * params.windVector.w * 0.35 + (hash(f32(idx) * 2.81 + params.time) - 0.5) * 18.0) * params.deltaTime * 60.0;
+  // Convective thermal buoyancy: upward lift decreases as embers rise away from heat plume
+  let heightAboveEmitter = max(0.0, p.pos.y - params.emitterPos.y);
+  let thermalLiftDecay = clamp(1.0 - (heightAboveEmitter / 400.0), 0.25, 1.0);
+  let lift = (3.5 + hash(f32(idx) + params.time) * 4.5) * thermalLiftDecay * params.deltaTime * 60.0;
+
+  // 3D Turbulent wind advection: boundary layer logarithmic wind profile (faster wind at higher altitude)
+  let altitudeFactor = 0.6 + clamp(heightAboveEmitter / 250.0, 0.0, 0.8);
+  let turbulenceX = (hash(f32(idx) * 1.37 + params.time) - 0.5) * 20.0;
+  let turbulenceZ = (hash(f32(idx) * 2.81 + params.time) - 0.5) * 20.0;
+
+  let windDriftX = (params.windVector.x * params.windVector.w * 0.35 * altitudeFactor + turbulenceX) * params.deltaTime * 60.0;
+  let windDriftZ = (params.windVector.z * params.windVector.w * 0.35 * altitudeFactor + turbulenceZ) * params.deltaTime * 60.0;
 
   p.pos.x += windDriftX;
   p.pos.y += lift;
@@ -152,7 +163,7 @@ export interface WebGPUParticlePipeline {
     emitterZ: number,
     dt: number,
     time: number
-  ): Promise<Float32Array | null>;
+  ): Promise<{ positions: Float32Array; latencyMs: number } | null>;
   destroy(): void;
 }
 
@@ -172,7 +183,6 @@ export async function createWebGPUParticlePipeline(
       code: PARTICLE_COMPUTE_WGSL,
     });
 
-    // Particle storage buffer (struct Particle: 8 floats = 32 bytes per particle)
     const particleBufferSize = particleCount * 32;
     const particleBuffer = device.createBuffer({
       label: 'Particle Storage Buffer',
@@ -180,7 +190,6 @@ export async function createWebGPUParticlePipeline(
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
 
-    // Populate initial particle data
     const particleData = new Float32Array(particleCount * 8);
     for (let i = 0; i < particleCount; i++) {
       particleData[i * 8] = initialPositions[i * 3]; // pos.x
@@ -194,14 +203,12 @@ export async function createWebGPUParticlePipeline(
     }
     device.queue.writeBuffer(particleBuffer, 0, particleData);
 
-    // Uniform buffer for simulation parameters (32 bytes aligned)
     const uniformBuffer = device.createBuffer({
       label: 'Simulation Uniform Buffer',
       size: 48,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Staging buffer for GPU-to-CPU readback
     const readbackBuffer = device.createBuffer({
       label: 'Particle Readback Buffer',
       size: particleBufferSize,
@@ -256,23 +263,22 @@ export async function createWebGPUParticlePipeline(
         emitterZ: number,
         dt: number,
         time: number
-      ): Promise<Float32Array | null> {
+      ): Promise<{ positions: Float32Array; latencyMs: number } | null> {
         if (isReadingBack) return null;
 
+        const startTimestamp = performance.now();
         const rad = (windAngleDeg * Math.PI) / 180;
         const windX = Math.sin(rad);
         const windZ = -Math.cos(rad);
 
-        // Update uniforms
         const uniformData = new Float32Array([
-          windX, 0, windZ, windSpeedMph, // windVector (vec4)
-          emitterX, emitterY, emitterZ, 4.0, // emitterPos (vec4)
-          time, dt, 0, Math.random(), // time, deltaTime, particleCount(u32), seed
+          windX, 0, windZ, windSpeedMph,
+          emitterX, emitterY, emitterZ, 4.0,
+          time, dt, 0, Math.random(),
         ]);
         new Uint32Array(uniformData.buffer, 40, 1)[0] = particleCount;
         device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 
-        // Encode compute pass
         const commandEncoder = device.createCommandEncoder();
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(computePipeline);
@@ -281,11 +287,9 @@ export async function createWebGPUParticlePipeline(
         passEncoder.dispatchWorkgroups(workgroupCount);
         passEncoder.end();
 
-        // Copy storage buffer to readback buffer
         commandEncoder.copyBufferToBuffer(particleBuffer, 0, readbackBuffer, 0, particleBufferSize);
         device.queue.submit([commandEncoder.finish()]);
 
-        // Map and extract positions
         isReadingBack = true;
         try {
           await readbackBuffer.mapAsync(GPUMapMode.READ);
@@ -296,7 +300,8 @@ export async function createWebGPUParticlePipeline(
             outputPositions[i * 3 + 2] = mappedArray[i * 8 + 2];
           }
           readbackBuffer.unmap();
-          return outputPositions;
+          const latencyMs = performance.now() - startTimestamp;
+          return { positions: outputPositions, latencyMs };
         } finally {
           isReadingBack = false;
         }
@@ -309,6 +314,286 @@ export async function createWebGPUParticlePipeline(
     };
   } catch (err) {
     console.warn('[WebGPU] Failed to initialize particle compute pipeline:', err);
+    return null;
+  }
+}
+
+// ── 2. WGSL Compute Shader for Parallel Rothermel Fire Propagation ───────────
+const SPREAD_COMPUTE_WGSL = `
+struct CellStatic {
+  lat: f32,
+  lng: f32,
+  ips: f32,
+  slope: f32,
+};
+
+struct SpreadUniforms {
+  ignitionPos: vec4<f32>, // x: lat, y: lng, z: unused, w: hasIgnition (1.0 or 0.0)
+  windParams: vec4<f32>,  // x: windX, y: windY, z: windSpeedMph, w: simTimeMin
+  cellCount: u32,
+  _pad1: u32,
+  _pad2: u32,
+  _pad3: u32,
+};
+
+struct SpreadResult {
+  isOnFire: f32,
+  arrivalTimeMin: f32,
+  burnIntensity: f32,
+  velocity: f32,
+};
+
+@group(0) @binding(0) var<storage, read> cells: array<CellStatic>;
+@group(0) @binding(1) var<uniform> uniforms: SpreadUniforms;
+@group(0) @binding(2) var<storage, read_write> results: array<SpreadResult>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= uniforms.cellCount) {
+    return;
+  }
+
+  var res: SpreadResult;
+  res.isOnFire = 0.0;
+  res.arrivalTimeMin = 999999.0;
+  res.burnIntensity = 0.0;
+  res.velocity = 0.0;
+
+  if (uniforms.ignitionPos.w < 0.5) {
+    results[idx] = res;
+    return;
+  }
+
+  let cell = cells[idx];
+  let dx = cell.lng - uniforms.ignitionPos.y;
+  let dy = cell.lat - uniforms.ignitionPos.x;
+  let distDeg = sqrt(dx * dx + dy * dy);
+
+  // Ignition cell check
+  if (distDeg < 0.0001) {
+    res.isOnFire = 1.0;
+    res.arrivalTimeMin = 0.0;
+    res.burnIntensity = clamp(0.4 + uniforms.windParams.w * 0.05, 0.0, 1.0);
+    res.velocity = 10.0;
+    results[idx] = res;
+    return;
+  }
+
+  let distM = distDeg * 111000.0;
+  let cellAngle = atan2(dx, dy);
+
+  let travelX = sin(cellAngle);
+  let travelY = cos(cellAngle);
+  let windAlignment = travelX * uniforms.windParams.x + travelY * uniforms.windParams.y;
+
+  let baseRate = 8.0 + cell.ips * 20.0;
+  let windRate = uniforms.windParams.z * 0.6 * windAlignment;
+  let slopeRate = cell.slope * 0.5;
+
+  let velocity = max(1.5, baseRate + windRate + slopeRate);
+  let arrivalTimeMin = distM / velocity;
+
+  let simTime = uniforms.windParams.w;
+  if (simTime >= arrivalTimeMin) {
+    res.isOnFire = 1.0;
+    let timeOnFire = simTime - arrivalTimeMin;
+    res.burnIntensity = clamp(0.2 + timeOnFire * 0.08, 0.0, 1.0);
+  }
+
+  res.arrivalTimeMin = arrivalTimeMin;
+  res.velocity = velocity;
+  results[idx] = res;
+}
+`;
+
+export interface WebGPUFireSpreadPipeline {
+  device: GPUDevice;
+  dispatch(
+    ignitionCell: HexCell | null,
+    windAngleDeg: number,
+    windSpeedMph: number,
+    simTimeMin: number
+  ): Promise<{
+    spreadStates: Record<string, { isOnFire: boolean; arrivalTimeMin: number; burnIntensity: number; velocity: number }>;
+    latencyMs: number;
+  } | null>;
+  destroy(): void;
+}
+
+/**
+ * Creates and binds a WebGPU compute pipeline for cellular fire spread propagation
+ */
+export async function createWebGPUFireSpreadPipeline(
+  cells: HexCell[]
+): Promise<WebGPUFireSpreadPipeline | null> {
+  const device = await getGPUDevice();
+  if (!device || cells.length === 0) return null;
+
+  const validCells = cells.filter((c) => c.lat !== undefined && c.lng !== undefined);
+  const cellCount = validCells.length;
+  if (cellCount === 0) return null;
+
+  try {
+    const shaderModule = device.createShaderModule({
+      label: 'Rothermel Fire Spread Compute Shader',
+      code: SPREAD_COMPUTE_WGSL,
+    });
+
+    // Static cell data: 4 floats per cell (lat, lng, ips, slope) = 16 bytes
+    const cellBufferSize = cellCount * 16;
+    const cellBuffer = device.createBuffer({
+      label: 'Cells Static Buffer',
+      size: cellBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+    const cellData = new Float32Array(cellCount * 4);
+    for (let i = 0; i < cellCount; i++) {
+      cellData[i * 4] = validCells[i].lat ?? 0;
+      cellData[i * 4 + 1] = validCells[i].lng ?? 0;
+      cellData[i * 4 + 2] = validCells[i].ips ?? 0;
+      cellData[i * 4 + 3] = validCells[i].slope ?? 0;
+    }
+    device.queue.writeBuffer(cellBuffer, 0, cellData);
+
+    // Uniform buffer (48 bytes)
+    const uniformBuffer = device.createBuffer({
+      label: 'Spread Uniform Buffer',
+      size: 48,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // Output results buffer: 4 floats per cell (isOnFire, arrivalTimeMin, burnIntensity, velocity) = 16 bytes
+    const resultBufferSize = cellCount * 16;
+    const resultBuffer = device.createBuffer({
+      label: 'Spread Results Storage Buffer',
+      size: resultBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+
+    const readbackBuffer = device.createBuffer({
+      label: 'Spread Readback Buffer',
+      size: resultBufferSize,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'read-only-storage' },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'uniform' },
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'storage' },
+        },
+      ],
+    });
+
+    const bindGroup = device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: cellBuffer } },
+        { binding: 1, resource: { buffer: uniformBuffer } },
+        { binding: 2, resource: { buffer: resultBuffer } },
+      ],
+    });
+
+    const pipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    });
+
+    const computePipeline = device.createComputePipeline({
+      layout: pipelineLayout,
+      compute: {
+        module: shaderModule,
+        entryPoint: 'main',
+      },
+    });
+
+    let isReadingBack = false;
+
+    return {
+      device,
+      async dispatch(
+        ignitionCell: HexCell | null,
+        windAngleDeg: number,
+        windSpeedMph: number,
+        simTimeMin: number
+      ): Promise<{
+        spreadStates: Record<string, { isOnFire: boolean; arrivalTimeMin: number; burnIntensity: number; velocity: number }>;
+        latencyMs: number;
+      } | null> {
+        if (isReadingBack) return null;
+
+        const startTimestamp = performance.now();
+        const windRad = (windAngleDeg * Math.PI) / 180;
+        const windX = Math.sin(windRad);
+        const windY = -Math.cos(windRad);
+
+        const hasIgnition = ignitionCell && ignitionCell.lat !== undefined && ignitionCell.lng !== undefined;
+        const ignLat = hasIgnition ? ignitionCell.lat! : 0;
+        const ignLng = hasIgnition ? ignitionCell.lng! : 0;
+
+        const uniformData = new Float32Array([
+          ignLat, ignLng, 0, hasIgnition ? 1.0 : 0.0, // ignitionPos
+          windX, windY, windSpeedMph, simTimeMin,     // windParams
+          0, 0, 0, 0,                                 // cellCount (u32) + padding
+        ]);
+        new Uint32Array(uniformData.buffer, 32, 1)[0] = cellCount;
+        device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder = commandEncoder.beginComputePass();
+        passEncoder.setPipeline(computePipeline);
+        passEncoder.setBindGroup(0, bindGroup);
+        const workgroups = Math.ceil(cellCount / 64);
+        passEncoder.dispatchWorkgroups(workgroups);
+        passEncoder.end();
+
+        commandEncoder.copyBufferToBuffer(resultBuffer, 0, readbackBuffer, 0, resultBufferSize);
+        device.queue.submit([commandEncoder.finish()]);
+
+        isReadingBack = true;
+        try {
+          await readbackBuffer.mapAsync(GPUMapMode.READ);
+          const mapped = new Float32Array(readbackBuffer.getMappedRange());
+          const spreadStates: Record<string, { isOnFire: boolean; arrivalTimeMin: number; burnIntensity: number; velocity: number }> = {};
+
+          for (let i = 0; i < cellCount; i++) {
+            const id = validCells[i].id;
+            spreadStates[id] = {
+              isOnFire: mapped[i * 4] > 0.5,
+              arrivalTimeMin: mapped[i * 4 + 1],
+              burnIntensity: mapped[i * 4 + 2],
+              velocity: mapped[i * 4 + 3],
+            };
+          }
+
+          readbackBuffer.unmap();
+          const latencyMs = performance.now() - startTimestamp;
+          return { spreadStates, latencyMs };
+        } finally {
+          isReadingBack = false;
+        }
+      },
+      destroy() {
+        cellBuffer.destroy();
+        uniformBuffer.destroy();
+        resultBuffer.destroy();
+        readbackBuffer.destroy();
+      },
+    };
+  } catch (err) {
+    console.warn('[WebGPU] Failed to initialize fire spread compute pipeline:', err);
     return null;
   }
 }

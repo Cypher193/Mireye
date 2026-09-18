@@ -15,8 +15,10 @@ import {
 import {
   getWebGPUStatus,
   createWebGPUParticlePipeline,
+  createWebGPUFireSpreadPipeline,
   type WebGPUStatus,
   type WebGPUParticlePipeline,
+  type WebGPUFireSpreadPipeline,
 } from '@/services/webGpuCompute';
 
 interface SimulationCanvasProps {
@@ -114,8 +116,10 @@ export function SimulationCanvas({
 
   // WebGPU & 3D Render Caching Telemetry
   const [webgpuStatus, setWebgpuStatus] = useState<WebGPUStatus | null>(null);
+  const [computeLatency, setComputeLatency] = useState<number | null>(null);
   const [isSatelliteCached, setIsSatelliteCached] = useState<boolean>(false);
   const webgpuPipelineRef = useRef<WebGPUParticlePipeline | null>(null);
+  const webgpuSpreadPipelineRef = useRef<WebGPUFireSpreadPipeline | null>(null);
   const renderControllerRef = useRef<RenderController>(new RenderController());
 
   // Detect WebGPU hardware adapter on mount
@@ -646,6 +650,14 @@ export function SimulationCanvas({
       }
     });
 
+    // Initialize WebGPU cellular fire spread compute pipeline
+    createWebGPUFireSpreadPipeline(cells).then((pipeline) => {
+      webgpuSpreadPipelineRef.current = pipeline;
+      if (pipeline) {
+        console.log('[SimulationCanvas] WebGPU Rothermel fire spread compute pipeline initialized successfully.');
+      }
+    });
+
     // Use built-in round particle texture creation
     const canvas = document.createElement('canvas');
     canvas.width = 16;
@@ -830,6 +842,10 @@ export function SimulationCanvas({
         webgpuPipelineRef.current.destroy();
         webgpuPipelineRef.current = null;
       }
+      if (webgpuSpreadPipelineRef.current) {
+        webgpuSpreadPipelineRef.current.destroy();
+        webgpuSpreadPipelineRef.current = null;
+      }
       tiles.dispose();
     };
   }, [cells, fireStations]);
@@ -894,32 +910,55 @@ export function SimulationCanvas({
       let burningCells: HexCell[] = [];
 
       if (simModeRef.current === 'predictive') {
-        spreadStates = computePredictiveSpread(
-          cellsRef.current,
-          selectedCell,
-          windAngle,
-          windSpeed,
-          time
-        );
+        const spreadPipeline = webgpuSpreadPipelineRef.current;
+        if (spreadPipeline) {
+          spreadPipeline.dispatch(selectedCell, windAngle, windSpeed, time).then((res) => {
+            if (res) {
+              setComputeLatency(res.latencyMs);
+              const gpuSpread = res.spreadStates;
+              burningCells = cellsRef.current.filter((c) => gpuSpread[c.id]?.isOnFire);
 
-        burningCells = cellsRef.current.filter((c) => {
-          const state = spreadStates[c.id];
-          return state && state.isOnFire;
-        });
+              cellMeshesRef.current.forEach((mesh) => {
+                const state = gpuSpread[mesh.id];
+                if (state && state.isOnFire) {
+                  (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(0xea580c);
+                  (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(0xdc2626);
+                } else {
+                  (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(mesh.baseColor);
+                  (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(mesh.id === selectedCell?.id ? 0x0ea5e9 : mesh.baseColor);
+                }
+              });
+              renderControllerRef.current.keepAlive(10);
+            }
+          });
+        } else {
+          spreadStates = computePredictiveSpread(
+            cellsRef.current,
+            selectedCell,
+            windAngle,
+            windSpeed,
+            time
+          );
 
-        // Update cell heights/colors based on spread
-        cellMeshesRef.current.forEach((mesh) => {
-          const state = spreadStates[mesh.id];
-          if (state && state.isOnFire) {
-            // Hot fire colors: glow orange/red based on burn intensity
-            (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(0xea580c);
-            (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(0xdc2626);
-          } else {
-            // Restore base color
-            (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(mesh.baseColor);
-            (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(mesh.id === selectedCell?.id ? 0x0ea5e9 : mesh.baseColor);
-          }
-        });
+          burningCells = cellsRef.current.filter((c) => {
+            const state = spreadStates[c.id];
+            return state && state.isOnFire;
+          });
+
+          // Update cell heights/colors based on spread
+          cellMeshesRef.current.forEach((mesh) => {
+            const state = spreadStates[mesh.id];
+            if (state && state.isOnFire) {
+              // Hot fire colors: glow orange/red based on burn intensity
+              (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(0xea580c);
+              (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(0xdc2626);
+            } else {
+              // Restore base color
+              (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(mesh.baseColor);
+              (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(mesh.id === selectedCell?.id ? 0x0ea5e9 : mesh.baseColor);
+            }
+          });
+        }
       }
 
       // Animate historical footprint scaling if Option A is active
@@ -965,10 +1004,11 @@ export function SimulationCanvas({
       // WebGPU Compute Pipeline Execution
       const pipeline = webgpuPipelineRef.current;
       if (pipeline) {
-        pipeline.dispatch(windAngle, windSpeed, emitterPos.x, emitterPos.y, emitterPos.z, 0.05, time).then((gpuPositions) => {
-          if (gpuPositions && fireGeom) {
+        pipeline.dispatch(windAngle, windSpeed, emitterPos.x, emitterPos.y, emitterPos.z, 0.05, time).then((gpuRes) => {
+          if (gpuRes && fireGeom) {
+            setComputeLatency((prev) => (prev !== null ? (prev + gpuRes.latencyMs) / 2 : gpuRes.latencyMs));
             const positions = fireGeom.attributes.position.array as Float32Array;
-            positions.set(gpuPositions);
+            positions.set(gpuRes.positions);
             fireGeom.attributes.position.needsUpdate = true;
             renderControllerRef.current.keepAlive(5);
           }
@@ -1131,11 +1171,18 @@ export function SimulationCanvas({
               </>
             )}
           </div>
-          {webgpuStatus?.architecture && (
-            <span className="font-mono text-[9px] text-ink-400 truncate max-w-[110px]" title={webgpuStatus.adapterName}>
-              {webgpuStatus.architecture}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {computeLatency !== null && (
+              <span className="font-mono text-[9px] text-emerald-400 font-bold">
+                {computeLatency.toFixed(2)}ms GPU
+              </span>
+            )}
+            {webgpuStatus?.architecture && (
+              <span className="font-mono text-[9px] text-ink-400 truncate max-w-[95px]" title={webgpuStatus.adapterName}>
+                {webgpuStatus.architecture}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* High-Resolution Satellite 3D Terrain Active Badge with IndexedDB Cache Indicator */}
