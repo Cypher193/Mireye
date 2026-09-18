@@ -133,78 +133,84 @@ A comprehensive audit of all API services utilized or integrated within the appl
 
 ### 5. What Has Been Implemented Till Now
 
-1. **National 50-State Interactive Map**:
-   * SVG-based continental US map with state boundaries and geographic centroids.
-   * Region-specific honeycomb clusters geographically aligned with pilot cities:
-     * Boulder County, CO
-     * Coconino County (Flagstaff), AZ
-     * Santa Barbara County, CA
-     * Deschutes County (Bend), OR
-     * Missoula County, MT
-     * Ada County (Boise), ID
-     * Chelan County, WA
-     * Kerr County, TX
-   * Smooth click-to-zoom transition from national view into county-level high-resolution grids.
+1. **Nationwide 50-State Interactive Map & Regional Centroids**:
+   * Complete 50-State US vector SVG map (`USAMapPaths.ts`) with interactive, clickable state boundaries.
+   * Comprehensive 50-State dataset (`counties.ts`) with designated high-risk WUI / rural fire counties for every state, containing exact coordinates, population, WUI housing unit counts, fire district numbers, staffed stations, and calculated SVG anchor centers (`cx`, `cy`).
+   * Smooth click-to-zoom transition: Clicking any state polygon, city marker, or honeycomb cluster smoothly zooms into that state's county grid.
 
-2. **64-Hex High-Resolution County Risk Grids**:
-   * Dynamic local H3-style hexagonal grid per county displaying real-time risk scores.
-   * Heat-map color coding from Navy Blue (Low Risk) to Deep Crimson (Severe Risk).
+2. **Searchable Multi-State Location Selector**:
+   * Instant search filter in `LocationSelector.tsx` allowing search by state code (e.g. `CA`, `FL`, `TX`), county name, or city.
+   * Scrollable dropdown viewport (`max-h-64`) with state badges, WUI unit counts, and live geocoded coordinate indicators.
+
+3. **64-Hex High-Resolution County Risk Grids**:
+   * Local H3-style hexagonal grid per county displaying real-time risk scores from Navy Blue (Low Risk) to Deep Crimson (Severe Risk).
    * Circular WUI hotspot markers highlighting priority housing clusters.
 
-3. **Production-Grade Mireye Earth Integration**:
-   * Typed, rate-limit-conscious client (`mireyeClient.ts`) utilizing Bearer JWT authentication.
-   * Automatic batch chunking (25 coordinates per batch) with exponential backoff and retry mechanisms.
-   * Multi-tiered caching (sessionStorage + in-memory store) preventing duplicate queries.
+4. **Production-Grade Mireye Earth Integration**:
+   * Typed client (`mireyeClient.ts`) with Bearer JWT authentication, 25-coordinate batch chunking, 150ms staggered requests, and automatic 429 backoff handling.
+   * Multi-tiered caching (sessionStorage + in-memory store) preventing redundant queries.
 
-4. **Dual Visualizer Engine**:
+5. **Real-Time Meteorology Ingestion (Open-Meteo / NOAA Feed)**:
+   * Dynamic live weather ingestion integrated into `SimulationCanvas.tsx`.
+   * Automatically queries and updates `windSpeed` (mph) and `windAngle` (°) for the coordinates of any selected county or hex.
+   * Displays live surface temperature (°F) and relative humidity (%) with a live sync status indicator and manual re-sync button.
+
+6. **Dual Visualizer Engine**:
    * **Standard 3D Map (`GoogleMap.tsx`)**: Google Maps Platform WebGL vector map with 3D buildings, tilt, heading controls, fire station markers, and interactive hover cards.
-   * **3D Simulation Canvas (`SimulationCanvas.tsx`)**: Three.js WebGL engine operating in ECEF 3D space with fire station beacon towers, response lines, and smooth camera panning.
+   * **3D Simulation Canvas (`SimulationCanvas.tsx`)**: Three.js WebGL engine operating in Earth-Centered, Earth-Fixed (ECEF) Cartesian coordinates with fire station beacon towers, response lines, and wind-drifted smoke/fire particle emitters.
 
-5. **Deterministic Physics Engines**:
+7. **Deterministic Physics Engines**:
    * `ipsEngine.ts`: Rothermel-inspired formula calculating normalized slope, fuel proxy, wind proxy, and thermal inertia.
    * `rcsEngine.ts`: NFPA 1710 compliance calculator (6-minute initial response benchmark) using live Mireye proximity queries and USFA registry fallback.
 
-6. **AI Reasoning Trace & Terminal Console**:
+8. **AI Reasoning Trace & Terminal Console**:
    * Real-time streaming terminal (`AIReasoningTrace.tsx`) detailing each step taken by the AI agent, displaying real API calls, latency measurements (in ms), parameter weights, and intermediate math.
 
-7. **Executive Capital Brief Generator**:
+9. **Executive Capital Brief System with 1-Click Export & Copy**:
    * `capitalBriefEngine.ts` compiles a three-paragraph, board-ready resource allocation justification based on live API telemetry.
-   * Recommends specific NFPA apparatus (e.g., Type 1 vs Type 3 engines, 2,500-gallon water tenders) and capital budgets for rural fire boards.
+   * `CapitalBrief.tsx` includes 1-click download of structured markdown briefs (`Capital_Brief_<County>_<HexId>.md`) and 1-click clipboard copy with animated feedback.
 
-8. **Phase 2 — Active Fire Response**:
-   * Historical spread footprints for landmark California/Colorado wildfires (Marshall, Tubbs, Camp, Cedar).
-   * Elliptical Rothermel predictive fire spread modeling with adjustable wind velocity/heading and timestep sliders.
-   * Standardized **CAP 1.2 (Common Alerting Protocol)** XML feed generator (`capGenerator.ts`) ready for broadcast to regional Emergency Notification Systems.
+10. **Phase 2 Active Fire Response & OASIS CAP 1.2 Alert Generator**:
+    * Historical spread footprints for landmark California/Colorado wildfires (Marshall, Tubbs, Camp, Cedar, etc.).
+    * Elliptical Rothermel predictive fire spread modeling with adjustable wind velocity/heading and timestep sliders.
+    * OASIS CAP 1.2 (Common Alerting Protocol) XML generator (`capGenerator.ts`) with 1-click copy and download for emergency broadcasts.
+
+11. **Technical Pipeline Specification & Agent Token Optimization**:
+    * `TECHNICAL_PIPELINE.md` documenting complete data pipelines, mathematical formulas, WGS84-to-ECEF math, and state lifecycles.
+    * `.agentignore` preventing token exhaustion from build artifacts, lockfiles, and raw SVG coordinates.
 
 ---
 
-### 6. Roadmap: What Is Yet To Be Done & Future Improvements
+### 6. Roadmap: What Is Still Left & Yet To Be Done
 
-#### A. Real-Time Meteorological & Satellite Ingestion
-* **MesoWest / NOAA NWS Live Weather Feed:** Connect real-time surface wind speed, gust direction, and relative humidity directly into the Rothermel elliptical spread model instead of manual slider inputs.
-* **NASA FIRMS / VIIRS / MODIS Active Fire Detections:** Ingest active 375m thermal anomaly satellite hotspots to automatically trigger Phase 2 active fire tracking the moment an ignition occurs.
+#### A. Pre-Caching & Static Bundles for Top US Megafire Hotspots
+* **Static JSON Pre-baking:** Generate pre-baked 64-hex telemetry files for the top 16 historical wildfire counties (e.g. Butte/Paradise CA, San Diego CA, Maui/Lahaina HI, Boulder CO, Coconino AZ, Jackson/Ashland OR, Chelan WA, Sevier/Gatlinburg TN).
+* **Instant Zero-Latency Loading:** Hydrate hotspot grids in sub-5ms with zero Mireye API credit consumption.
 
-#### B. Model Context Protocol (MCP) Server & SafeMCP Integration
+#### B. Real-Time Satellite Thermal Anomaly Detection (NASA FIRMS)
+* **Live MODIS / VIIRS Ingestion:** Ingest 375m active satellite thermal anomaly feeds to automatically trigger Phase 2 active fire tracking the moment an ignition occurs.
+
+#### C. Model Context Protocol (MCP) Server & SafeMCP Integration
 * **Expose CCG as an MCP Server (`ccg-mcp`):** Allow external LLM agents (Claude Desktop, Gemini Antigravity, ChatGPT) to call tools like `get_hex_physics(lat, lng)`, `compute_ccg_gap()`, and `generate_capital_brief()` over JSON-RPC.
 * **SafeMCP Guardrails:** Integrate human-in-the-loop safety checks before allowing the agent to stage emergency notification broadcasts or CAD dispatch proposals.
 
-#### C. Computer-Aided Dispatch (CAD) & Mutual Aid Routing
+#### D. Computer-Aided Dispatch (CAD) & Mutual Aid Routing
 * **Direct CAD System Integration:** Interface with open/commercial CAD platforms (e.g., Resgrid API/MCP, Mark43) to pre-populate response tickets for recommended apparatus.
 * **Wildfire-Aware Road Network Routing:** Integrate OSRM or Google Directions API with dynamic terrain/smoke obstruction penalties, accounting for narrow rural roads, one-lane mountain bridges, and active fire perimeter road closures.
 
-#### D. Parcel-Level Structural Vulnerability (NFPA 1144 Compliance)
+#### E. Parcel-Level Structural Vulnerability (NFPA 1144 Compliance)
 * **Building Footprints & Parcel Boundaries:** Ingest county tax assessor and Microsoft Building Footprint data to calculate defensible space buffers (30–100 ft) per parcel.
 * **Computer Vision Roof & Cladding Classification:** Use aerial orthomosaics to automatically tag combustible wood shake roofs, open eaves, and unmaintained brush directly adjacent to residential structures.
 
-#### E. Physics-Informed Neural Networks (PINNs) & Firebrand Spotting
+#### F. Physics-Informed Neural Networks (PINNs) & Firebrand Spotting
 * **Surrogate PINN Fluid Solvers:** Supplement 2D elliptical approximations with GPU-accelerated PINN world models (e.g., PhysFire-WM) to capture 3D flame-atmosphere coupling, crown fire transitions, and urban canyon Venturi wind accelerations in milliseconds.
 * **Firebrand (Ember) Transport Modeling:** Implement Monte Carlo aerodynamic drag models that simulate embers lofted by convective plumes landing downwind, predicting spot ignitions 1–3 miles ahead of the main firefront.
 
-#### F. Evacuation Traffic Dynamics & Public Alerting (IPAWS)
+#### G. Evacuation Traffic Dynamics & Public Alerting (IPAWS)
 * **WUI Evacuation Bottleneck Analysis:** Simulate civilian vehicular egress rates against arterial road capacities to identify trapped communities before an order is issued.
 * **Two-Way FEMA IPAWS / Wireless Emergency Alerts (WEA):** Connect the CAP 1.2 XML output directly to an IPAWS staging endpoint for authorized incident commander sign-off.
 
-#### G. Multi-Region Dynamic Tiling & Enterprise Infrastructure
+#### H. Multi-Region Dynamic Tiling & Enterprise Infrastructure
 * **Dynamic Nationwide Uber H3 Hex Tiling:** Expand beyond pre-configured pilot counties to allow any user to pan/zoom anywhere in the US, dynamically generating H3 resolution 8/9 hexagons on the fly.
 * **Server-Side Edge Caching (Supabase / Redis):** Cache Mireye Earth API responses on edge servers so multi-user county board sessions load instantly without consuming API rate quotas.
 * **Exportable PDF Briefs:** Add 1-click generation of PDF executive briefing decks complete with map snapshots, NFPA justification, and fiscal budgets for county commissioners.
