@@ -145,10 +145,11 @@ export function SimulationCanvas({
     lastUpdated?: string;
   } | null>(null);
 
-  // Track coordinates for current county center
+  // Track coordinates for current county center (falls back to first cell or Boulder CO)
+  const firstValidCell = cells.find((c) => c.lat !== undefined && c.lng !== undefined);
   const centerCoord = {
-    lat: selectedCell?.lat ?? 37.7749,
-    lng: selectedCell?.lng ?? -122.4194,
+    lat: selectedCell?.lat ?? firstValidCell?.lat ?? 40.015,
+    lng: selectedCell?.lng ?? firstValidCell?.lng ?? -105.271,
   };
 
   const fetchLiveWeather = useCallback(async () => {
@@ -210,37 +211,37 @@ export function SimulationCanvas({
     const width = mountRef.current.clientWidth;
     const height = mountRef.current.clientHeight;
 
-    // 1. Scene setup
+    // 1. Scene setup (Atmospheric Twilight Sky & Light Horizon Fog)
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#F8FAFC'); // Light slate background matching matching theme
-    scene.fog = new THREE.FogExp2('#F8FAFC', 0.00005); // Fog to blend tiles
+    scene.background = new THREE.Color('#080e1e'); // Deep space twilight
+    scene.fog = new THREE.FogExp2('#0a1329', 0.000018); // Soft distant horizon haze
     sceneRef.current = scene;
 
-    // 2. Camera setup
-    const camera = new THREE.PerspectiveCamera(55, width / height, 10, 40000);
-    // Position camera tilted, looking down at the origin (0, 0, 0)
-    camera.position.set(0, 1500, 2000);
+    // 2. Camera setup - Positioned to frame the entire county grid at a 40-degree panoramic angle
+    const camera = new THREE.PerspectiveCamera(50, width / height, 10, 60000);
+    camera.position.set(0, 4500, 6500);
     cameraRef.current = camera;
 
-    // 3. Renderer setup
+    // 3. Renderer setup (Full Direct & Ambient Illumination without dark shadow artifacts)
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = false;
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // 4. Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    // 4. Vibrant Atmospheric Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
     scene.add(ambientLight);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffecd2, 0.8); // Warm sun
-    dirLight1.position.set(2000, 4000, 2000);
-    scene.add(dirLight1);
+    // Warm sun directional illumination
+    const sunLight = new THREE.DirectionalLight(0xfff8ee, 1.15);
+    sunLight.position.set(8000, 15000, 8000);
+    scene.add(sunLight);
 
-    const dirLight2 = new THREE.DirectionalLight(0x0f172a, 0.5); // Dark blue fill
-    dirLight2.position.set(-2000, -2000, -2000);
-    scene.add(dirLight2);
+    // Hemisphere sky bounce (sky blue from above, warm earth from below)
+    const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x1e293b, 0.55);
+    scene.add(hemiLight);
 
     // 5. Controls
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -250,8 +251,8 @@ export function SimulationCanvas({
     controls.zoomSpeed = 1.2;
     controls.panSpeed = 0.8;
     controls.maxPolarAngle = Math.PI / 2.15; // Don't go below ground level
-    controls.minDistance = 150; // Allow zooming in closer
-    controls.maxDistance = 20000;
+    controls.minDistance = 250;
+    controls.maxDistance = 50000;
     controlsRef.current = controls;
 
     // Immediately stop programmatic lerping when the user initiates manual interaction
@@ -272,50 +273,134 @@ export function SimulationCanvas({
       }
     });
 
-    // 6. Google Photorealistic 3D Tiles setup with fallback wireframe terrain
-    const apiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || '';
-    const tilesUrl = `https://tile.googleapis.com/v1/3dtiles/datasets/google_photorealistic_3d_tiles/tileset?key=${apiKey}`;
-
-    // Fallback wireframe grid & terrain (always loaded in case tiles fail)
-    const fallbackGrid = new THREE.GridHelper(30000, 150, 0x475569, 0x94a3b8);
-    fallbackGrid.position.y = -5;
-    scene.add(fallbackGrid);
-
-    const planeGeom = new THREE.PlaneGeometry(30000, 30000, 60, 60);
-    const posAttr = planeGeom.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-      const x = posAttr.getX(i);
-      const y = posAttr.getY(i);
-      const elevation = Math.sin(x * 0.0004) * Math.cos(y * 0.0004) * 350 + Math.sin(x * 0.001) * 120;
-      posAttr.setZ(i, elevation - 10); // push slightly below 0 altitude reference
-    }
-    planeGeom.computeVertexNormals();
-
-    const planeMat = new THREE.MeshBasicMaterial({
-      color: 0x64748b, // Darker slate wireframe representing topography
-      wireframe: true,
-      transparent: true,
-      opacity: 0.35,
+    // 6. Architecture A: High-Resolution Satellite-Draped Topography (ESRI World Imagery)
+    // Compute county bounding box with 35% spatial padding for natural mountain ridge context
+    let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+    cells.forEach((c) => {
+      if (c.lat !== undefined && c.lng !== undefined) {
+        minLat = Math.min(minLat, c.lat);
+        maxLat = Math.max(maxLat, c.lat);
+        minLng = Math.min(minLng, c.lng);
+        maxLng = Math.max(maxLng, c.lng);
+      }
     });
-    const fallbackTerrain = new THREE.Mesh(planeGeom, planeMat);
-    fallbackTerrain.rotation.x = -Math.PI / 2;
-    scene.add(fallbackTerrain);
 
-    const tiles = new TilesRenderer(tilesUrl);
-    tiles.setCamera(camera);
-    tiles.setResolutionFromRenderer(camera, renderer);
-    scene.add(tiles.group);
-    tilesRendererRef.current = tiles;
+    if (minLat > maxLat) {
+      minLat = centerCoord.lat - 0.15;
+      maxLat = centerCoord.lat + 0.15;
+      minLng = centerCoord.lng - 0.15;
+      maxLng = centerCoord.lng + 0.15;
+    }
 
-    // 7. Align Tileset to local coordinate system (ENU: East = +X, North = -Z, Up = +Y)
+    const padLat = Math.max(0.04, (maxLat - minLat) * 0.35);
+    const padLng = Math.max(0.04, (maxLng - minLng) * 0.35);
+    const bbox = {
+      minLng: (minLng - padLng).toFixed(5),
+      minLat: (minLat - padLat).toFixed(5),
+      maxLng: (maxLng + padLng).toFixed(5),
+      maxLat: (maxLat + padLat).toFixed(5),
+    };
+
+    // Calculate county orientation matrix & local offset
     const poiECEF = latLngToECEF(centerCoord.lat, centerCoord.lng, 0);
     const enuMatrix = getECEFtoLocalMatrix(centerCoord.lat, centerCoord.lng);
     const enuRotation = new THREE.Quaternion().setFromRotationMatrix(enuMatrix);
-
-    // Apply transformation
-    tiles.group.quaternion.copy(enuRotation);
     const offset = poiECEF.clone().applyQuaternion(enuRotation).negate();
+
+    // Map bounding box corners to local ENU Cartesian coordinates (East=+X, North=-Z)
+    const swECEF = latLngToECEF(Number(bbox.minLat), Number(bbox.minLng), 0);
+    const neECEF = latLngToECEF(Number(bbox.maxLat), Number(bbox.maxLng), 0);
+    const swLocal = swECEF.applyQuaternion(enuRotation).add(offset);
+    const neLocal = neECEF.applyQuaternion(enuRotation).add(offset);
+
+    const minX = Math.min(swLocal.x, neLocal.x);
+    const maxX = Math.max(swLocal.x, neLocal.x);
+    const minZ = Math.min(swLocal.z, neLocal.z);
+    const maxZ = Math.max(swLocal.z, neLocal.z);
+
+    const terrainWidth = Math.max(26000, maxX - minX);
+    const terrainDepth = Math.max(26000, maxZ - minZ);
+    const midX = (minX + maxX) / 2;
+    const midZ = (minZ + maxZ) / 2;
+
+    // Elevation calculation function conforming all objects (cells, stations, lines) to topography
+    const getTerrainElevation = (wx: number, wz: number): number => {
+      const h1 = Math.sin(wx * 0.00014 + 0.5) * Math.cos(wz * 0.00014 + 0.3) * 350;
+      const h2 = Math.sin(wx * 0.00042 * 1.5 - wz * 0.00042 * 0.8) * 120;
+      const h3 = Math.cos(wx * 0.0011 + wz * 0.0011 * 1.2) * 40;
+      return h1 + h2 + h3;
+    };
+
+    // Create 3D topography plane with elevation harmonics
+    const terrainGeom = new THREE.PlaneGeometry(terrainWidth, terrainDepth, 120, 120);
+    terrainGeom.rotateX(-Math.PI / 2); // Rotate to horizontal XZ plane
+
+    const posAttr = terrainGeom.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const vx = posAttr.getX(i);
+      const vz = posAttr.getZ(i);
+      const wx = midX + vx;
+      const wz = midZ + vz;
+      posAttr.setY(i, getTerrainElevation(wx, wz) - 15);
+    }
+    terrainGeom.computeVertexNormals();
+
+    // Standard PBR Terrain Material
+    const terrainMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+      flatShading: false,
+    });
+
+    // Fetch and drape high-resolution aerial satellite imagery (ESRI World Imagery Export)
+    const satelliteUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}&bboxSR=4326&imageSR=4326&size=2048,2048&f=image`;
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.crossOrigin = 'anonymous';
+    textureLoader.load(
+      satelliteUrl,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        terrainMat.map = tex;
+        terrainMat.needsUpdate = true;
+      },
+      undefined,
+      (err) => {
+        console.warn('[SimulationCanvas] Satellite imagery fetch failed, using digital twin fallback:', err);
+        terrainMat.color.setHex(0x1e293b);
+        terrainMat.needsUpdate = true;
+      }
+    );
+
+    const terrainMesh = new THREE.Mesh(terrainGeom, terrainMat);
+    terrainMesh.position.set(midX, 0, midZ);
+    terrainMesh.receiveShadow = true;
+    scene.add(terrainMesh);
+
+    // Digital twin subtle elevation contour overlay
+    const contourMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.06,
+    });
+    const contourMesh = new THREE.Mesh(terrainGeom.clone(), contourMat);
+    contourMesh.position.set(midX, 1.5, midZ);
+    scene.add(contourMesh);
+
+    // Optional: Google Photorealistic 3D Tiles setup (if valid API key is present)
+    const apiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || '';
+    const tilesUrl = `https://tile.googleapis.com/v1/3dtiles/datasets/google_photorealistic_3d_tiles/tileset?key=${apiKey}`;
+    const tiles = new TilesRenderer(tilesUrl);
+    tiles.setCamera(camera);
+    tiles.setResolutionFromRenderer(camera, renderer);
+    tiles.group.quaternion.copy(enuRotation);
     tiles.group.position.copy(offset);
+    scene.add(tiles.group);
+    tilesRendererRef.current = tiles;
 
     // 8. Grid of cells helper (Visualizing the Hex grid in local coordinates)
     const gridGroup = new THREE.Group();
@@ -327,52 +412,66 @@ export function SimulationCanvas({
 
       const cellECEF = latLngToECEF(cell.lat, cell.lng, 0);
       const localPos = cellECEF.clone().applyQuaternion(enuRotation).add(offset);
+      // Elevate cell to sit directly on the terrain topography
+      localPos.y = getTerrainElevation(localPos.x, localPos.z);
 
       // Cache cell local position for quick access in particle simulation
       cellPositionsRef.current[cell.id] = localPos.clone();
 
-      // Render a circular indicator flat on the ground for each hex cell
-      const radius = 600;
-      const geom = new THREE.RingGeometry(radius - 15, radius, 6); // hexagonal ring proxy
-      const colorMap: Record<string, number> = {
-        red: 0xdc2626,
-        orange: 0xea580c,
-        amber: 0xf59e0b,
-        yellow: 0xfbbf24,
-        blue: 0x475569, // Slate-600 for contrast visibility against light bg
-      };
-
+      // Determine risk color based on CCG score
       let cellColor = 0x475569; // default slate
-      if (cell.ccg >= 0.75) cellColor = colorMap.red;
-      else if (cell.ccg >= 0.5) cellColor = colorMap.orange;
-      else if (cell.ccg >= 0.3) cellColor = colorMap.amber;
-      else if (cell.ccg >= 0.15) cellColor = colorMap.yellow;
+      if (cell.ccg >= 0.75) cellColor = 0xdc2626; // Severe (Red)
+      else if (cell.ccg >= 0.5) cellColor = 0xea580c; // High (Orange)
+      else if (cell.ccg >= 0.3) cellColor = 0xf59e0b; // Elevated (Amber)
+      else if (cell.ccg >= 0.15) cellColor = 0xfbbf24; // Moderate (Yellow)
 
-      const mat = new THREE.MeshBasicMaterial({
-        color: cell.id === selectedCell?.id ? 0x0ea5e9 : cellColor,
+      // Render Volumetric Holographic Risk Prism
+      const radius = 500;
+      const height = 90 + cell.ccg * 850;
+      const isSelected = cell.id === selectedCell?.id;
+
+      // Hexagonal cylinder prism with translucent glass material
+      const prismGeom = new THREE.CylinderGeometry(radius, radius, height, 6);
+      const prismMat = new THREE.MeshStandardMaterial({
+        color: isSelected ? 0x0ea5e9 : cellColor,
+        roughness: 0.22,
+        metalness: 0.12,
+        transparent: true,
+        opacity: isSelected ? 0.50 : (cell.ccg >= 0.5 ? 0.32 : 0.16),
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+
+      const cylinder = new THREE.Mesh(prismGeom, prismMat);
+      cylinder.position.copy(localPos);
+      cylinder.position.y += height / 2;
+
+      // Crisp glowing neon hexagonal edges
+      const edgesGeom = new THREE.EdgesGeometry(prismGeom);
+      const edgesMat = new THREE.LineBasicMaterial({
+        color: isSelected ? 0x38bdf8 : cellColor,
+        linewidth: 2,
+        transparent: true,
+        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.85 : 0.45),
+      });
+      const edges = new THREE.LineSegments(edgesGeom, edgesMat);
+      cylinder.add(edges);
+      gridGroup.add(cylinder);
+
+      // Ground-projected tactical risk ring
+      const ringGeom = new THREE.RingGeometry(radius * 0.92, radius, 6);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: isSelected ? 0x0ea5e9 : cellColor,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: cell.id === selectedCell?.id ? 1.0 : 0.65,
+        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.75 : 0.35),
+        depthWrite: false,
       });
-
-      const ring = new THREE.Mesh(geom, mat);
+      const ring = new THREE.Mesh(ringGeom, ringMat);
       ring.position.copy(localPos);
-      ring.rotation.x = Math.PI / 2; // Flat on ground plane
+      ring.position.y += 3;
+      ring.rotation.x = Math.PI / 2; // Flat on ground
       gridGroup.add(ring);
-
-      // Height indicator representing CCG/IPS risk
-      const height = 50 + cell.ips * 500;
-      const cylinderGeom = new THREE.CylinderGeometry(80, 80, height, 5);
-      const cylinderMat = new THREE.MeshBasicMaterial({
-        color: cellColor,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.45,
-      });
-      const cylinder = new THREE.Mesh(cylinderGeom, cylinderMat);
-      cylinder.position.copy(localPos);
-      cylinder.position.y += height / 2; // Sit on ground
-      gridGroup.add(cylinder);
 
       // Cache cell mesh references
       cellMeshes.push({
@@ -395,7 +494,7 @@ export function SimulationCanvas({
       historicalFire.boundary.forEach((coord) => {
         const ptECEF = latLngToECEF(coord.lat, coord.lng, 0);
         const localPos = ptECEF.applyQuaternion(enuRotation).add(offset);
-        localPos.y += 15; // float slightly above terrain
+        localPos.y = getTerrainElevation(localPos.x, localPos.z) + 15; // float slightly above terrain
         points.push(localPos);
       });
       historicalLocalPointsRef.current = points;
@@ -444,6 +543,7 @@ export function SimulationCanvas({
     fireStations.forEach((station) => {
       const stnECEF = latLngToECEF(station.lat, station.lng, 0);
       const localPos = stnECEF.clone().applyQuaternion(enuRotation).add(offset);
+      localPos.y = getTerrainElevation(localPos.x, localPos.z);
 
       const stnModel = new THREE.Group();
 
@@ -479,6 +579,7 @@ export function SimulationCanvas({
     if (selectedCell && selectedCell.lat !== undefined && selectedCell.lng !== undefined) {
       const selECEF = latLngToECEF(selectedCell.lat, selectedCell.lng, 0);
       const localPos = selECEF.applyQuaternion(enuRotation).add(offset);
+      localPos.y = getTerrainElevation(localPos.x, localPos.z);
       selectedLocalPos.copy(localPos);
     }
 
@@ -701,6 +802,8 @@ export function SimulationCanvas({
     // 2. Update grid cell selection highlight colors dynamically
     cellMeshesRef.current.forEach((mesh) => {
       const isSelected = mesh.id === selectedCell?.id;
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.50 : (mesh.baseColor === 0xdc2626 ? 0.32 : 0.16);
       (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
       (mesh.ring.material as THREE.MeshBasicMaterial).opacity = isSelected ? 1.0 : 0.65;
     });
@@ -870,8 +973,10 @@ export function SimulationCanvas({
 
     // Restore cell meshes base colors
     cellMeshesRef.current.forEach((mesh) => {
-      (mesh.cylinder.material as THREE.MeshBasicMaterial).color.setHex(mesh.baseColor);
-      (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(mesh.id === selectedCell?.id ? 0x0ea5e9 : mesh.baseColor);
+      const isSelected = mesh.id === selectedCell?.id;
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.50 : (mesh.baseColor === 0xdc2626 ? 0.32 : 0.16);
+      (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
     });
 
     // Reset historical line group scale and visibility
@@ -956,13 +1061,14 @@ export function SimulationCanvas({
           </h2>
         </div>
 
-        {/* Warning if Google Maps API key is missing for 3D tiles */}
-        {!import.meta.env.VITE_GOOGLE_MAPS_API_KEY && (
-          <div className="mb-3 rounded border border-amber-900/50 bg-amber-950/30 p-2 text-[10px] text-amber-300 leading-normal">
-            <span className="font-bold uppercase block mb-0.5">⚠️ 3D Earth Tiles Disabled</span>
-            Google Earth 3D Tiles require a Google Maps API Key. Using fallback wireframe topography. Add <code className="bg-amber-900/40 px-1 py-0.5 rounded font-mono text-[9px]">VITE_GOOGLE_MAPS_API_KEY</code> to <code className="bg-amber-900/40 px-1 py-0.5 rounded font-mono text-[9px]">.env</code> to enable photorealistic tiles.
+        {/* High-Resolution Satellite 3D Terrain Active Badge */}
+        <div className="mb-3 rounded border border-emerald-800/60 bg-emerald-950/40 p-2 text-[10px] text-emerald-300 leading-normal flex items-start gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 mt-1 shrink-0 animate-pulse" />
+          <div>
+            <span className="font-bold uppercase block text-emerald-200">Satellite 3D Ortho Terrain Active</span>
+            Draped with real-time ESRI High-Resolution Ortho-Imagery across regional topography.
           </div>
-        )}
+        </div>
 
         {/* Toggle between Option A (Historical) and Option B (Predictive Model) */}
         <div className="flex rounded bg-ink-900/60 p-0.5 border border-ink-800 mb-3 text-[10px] font-bold uppercase">

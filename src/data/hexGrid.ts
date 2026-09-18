@@ -289,22 +289,36 @@ export async function fetchHexGrid(countyId: string): Promise<HexCell[]> {
 }
 
 // ── Legacy synchronous fallback ────────────────────────────────────────────
-// Used as placeholder while async data is loading (returns empty grid structure).
+// Used as placeholder while async data is loading (returns pre-geocoded grid structure).
 export function generateHexGridSkeleton(countyId: string): HexCell[] {
+  const county = COUNTIES.find((c) => c.id === countyId) ?? COUNTIES[0];
+  const centerLat = county.lat ?? 40.015;
+  const centerLng = county.lng ?? -105.271;
+  const LAT_STEP = 0.014;
+  const LNG_STEP = 0.017;
+  const startLat = centerLat + (ROWS / 2) * LAT_STEP;
+  const startLng = centerLng - (COLS / 2) * LNG_STEP;
+
   const cells: HexCell[] = [];
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const offset = row % 2 === 1 ? HEX_W / 2 : 0;
       const cx = col * HEX_W + offset + HEX_W;
       const cy = row * HEX_H + HEX_SIZE + 4;
+      const lngOffset = row % 2 === 1 ? LNG_STEP / 2 : 0;
+      const cellLat = startLat - row * LAT_STEP;
+      const cellLng = startLng + col * LNG_STEP + lngOffset;
+
       cells.push({
         id: `${countyId}-h${row}${col}`,
         row, col, cx, cy,
+        lat: cellLat,
+        lng: cellLng,
         vertices: hexVertices(cx, cy, HEX_SIZE - 1.5),
-        ips: 0, rcs: 0, ccg: 0,
-        fuelProxy: 0, slope: 0, wind: 0, thermalInertia: 0,
-        driveTimeMin: 0, staffedStations: 0, housingUnits: 0,
-        wuiCluster: false, riskLabel: 'Low',
+        ips: 0.35, rcs: 0.5, ccg: 0.25,
+        fuelProxy: 0.4, slope: 12, wind: 10, thermalInertia: 0.3,
+        driveTimeMin: 6, staffedStations: county.staffedStations ?? 4, housingUnits: 120,
+        wuiCluster: false, riskLabel: 'Moderate',
       });
     }
   }
