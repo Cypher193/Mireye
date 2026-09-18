@@ -176,11 +176,18 @@ $$Y = (N(\phi) + h) \cos\phi \sin\lambda$$
 $$Z = \left(N(\phi)(1 - e^2) + h\right) \sin\phi$$
 
 #### B. Local Tangent Plane (ENU) Alignment
-To position the Three.js camera directly over the county center without inverted orientation:
-1. Normal vector $\vec{n} = \frac{\vec{P}_{\text{ECEF}}}{\|\vec{P}_{\text{ECEF}}\|}$.
-2. Up vector $\vec{u} = (0, 1, 0)$.
-3. Quaternion rotation $Q = \text{Quaternion.setFromUnitVectors}(\vec{n}, \vec{u})$.
-4. Local position $\vec{P}_{\text{local}} = Q \cdot (\vec{P}_{\text{cell}} - \vec{P}_{\text{center}})$.
+To position the Three.js camera directly over the county center with strict geographic North alignment (preventing longitude-dependent rotation and 90-degree disorientation):
+1. **East Unit Vector ($\hat{E}$):** $\hat{E} = [-\sin\lambda, \cos\lambda, 0] \quad \to \text{maps to local }+X\text{ (Right)}$.
+2. **Up Unit Vector ($\hat{U}$):** $\hat{U} = [\cos\phi\cos\lambda, \cos\phi\sin\lambda, \sin\phi] \quad \to \text{maps to local }+Y\text{ (Zenith)}$.
+3. **North Unit Vector ($\hat{N}$):** $\hat{N} = [-\sin\phi\cos\lambda, -\sin\phi\sin\lambda, \cos\phi] \quad \to \text{maps to local }-Z\text{ (Forward)}$.
+4. **Geodetic ENU Rotation Matrix ($M_{\text{ENU}}$):**
+$$M_{\text{ENU}} = \begin{bmatrix}
+-\sin\lambda & \cos\lambda & 0 & 0 \\
+\cos\phi\cos\lambda & \cos\phi\sin\lambda & \sin\phi & 0 \\
+\sin\phi\cos\lambda & \sin\phi\sin\lambda & -\cos\phi & 0 \\
+0 & 0 & 0 & 1
+\end{bmatrix}$$
+5. Local Cartesian position: $\vec{P}_{\text{local}} = M_{\text{ENU}} \cdot (\vec{P}_{\text{cell}} - \vec{P}_{\text{center}})$.
 
 #### C. Particle Dynamics & Wind Vector Physics
 Fire and smoke particle emitters drift according to live surface wind vectors:

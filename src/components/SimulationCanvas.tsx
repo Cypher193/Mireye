@@ -43,6 +43,32 @@ function latLngToECEF(lat: number, lng: number, alt: number = 0): THREE.Vector3 
   return new THREE.Vector3(x, y, z);
 }
 
+// Construct rigorous geodetic ENU (East-North-Up) rotation matrix:
+// Local +X = East, Local +Y = Up (Zenith), Local -Z = North (Forward).
+// This guarantees that North is strictly aligned with -Z across all 50 states,
+// preventing longitude-dependent rotation and the 90-degree disorientation bug.
+function getECEFtoLocalMatrix(lat: number, lng: number): THREE.Matrix4 {
+  const radLat = (lat * Math.PI) / 180;
+  const radLng = (lng * Math.PI) / 180;
+
+  const sinLat = Math.sin(radLat);
+  const cosLat = Math.cos(radLat);
+  const sinLng = Math.sin(radLng);
+  const cosLng = Math.cos(radLng);
+
+  // East = [-sinLng, cosLng, 0] -> maps to local +X [1, 0, 0]
+  // Up   = [cosLat*cosLng, cosLat*sinLng, sinLat] -> maps to local +Y [0, 1, 0]
+  // North = [-sinLat*cosLng, -sinLat*sinLng, cosLat] -> maps to local -Z [0, 0, -1]
+  const m = new THREE.Matrix4();
+  m.set(
+    -sinLng, cosLng, 0, 0,
+    cosLat * cosLng, cosLat * sinLng, sinLat, 0,
+    sinLat * cosLng, sinLat * sinLng, -cosLat, 0,
+    0, 0, 0, 1
+  );
+  return m;
+}
+
 export function SimulationCanvas({
   cells,
   selectedCell,
@@ -72,6 +98,7 @@ export function SimulationCanvas({
   const historicalLineGroupRef = useRef<THREE.Group | null>(null);
   const historicalLocalPointsRef = useRef<THREE.Vector3[]>([]);
   const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
+  const isPanningToTargetRef = useRef<boolean>(false);
 
   // Derived unique list of fire stations serving the county cells
   const fireStations = useMemo(() => {
@@ -227,10 +254,15 @@ export function SimulationCanvas({
     controls.maxDistance = 20000;
     controlsRef.current = controls;
 
-    // Bind change listener for camera updates
-    controls.addEventListener('change', () => {
+    // Immediately stop programmatic lerping when the user initiates manual interaction
+    controls.addEventListener('start', () => {
+      isPanningToTargetRef.current = false;
+    });
+
+    // Notify camera change on user interaction end to avoid 60fps render thrashing
+    controls.addEventListener('end', () => {
       if (onCameraChange) {
-        const localVec = camera.position.clone();
+        const localVec = camera.position.clone().sub(controls.target);
         onCameraChange({
           center: centerCoord,
           zoom: Math.round(15 - Math.log2(localVec.length() / 100)),
@@ -275,15 +307,14 @@ export function SimulationCanvas({
     scene.add(tiles.group);
     tilesRendererRef.current = tiles;
 
-    // 7. Align Tileset to local coordinate system (Y-Up flat plane at POI)
+    // 7. Align Tileset to local coordinate system (ENU: East = +X, North = -Z, Up = +Y)
     const poiECEF = latLngToECEF(centerCoord.lat, centerCoord.lng, 0);
-    const normal = poiECEF.clone().normalize();
-    const up = new THREE.Vector3(0, 1, 0);
-    const quaternion = new THREE.Quaternion().setFromUnitVectors(normal, up);
+    const enuMatrix = getECEFtoLocalMatrix(centerCoord.lat, centerCoord.lng);
+    const enuRotation = new THREE.Quaternion().setFromRotationMatrix(enuMatrix);
 
     // Apply transformation
-    tiles.group.quaternion.copy(quaternion);
-    const offset = poiECEF.clone().applyQuaternion(quaternion).negate();
+    tiles.group.quaternion.copy(enuRotation);
+    const offset = poiECEF.clone().applyQuaternion(enuRotation).negate();
     tiles.group.position.copy(offset);
 
     // 8. Grid of cells helper (Visualizing the Hex grid in local coordinates)
@@ -295,7 +326,7 @@ export function SimulationCanvas({
       if (cell.lat === undefined || cell.lng === undefined) return;
 
       const cellECEF = latLngToECEF(cell.lat, cell.lng, 0);
-      const localPos = cellECEF.clone().applyQuaternion(quaternion).add(offset);
+      const localPos = cellECEF.clone().applyQuaternion(enuRotation).add(offset);
 
       // Cache cell local position for quick access in particle simulation
       cellPositionsRef.current[cell.id] = localPos.clone();
@@ -363,7 +394,7 @@ export function SimulationCanvas({
       const points: THREE.Vector3[] = [];
       historicalFire.boundary.forEach((coord) => {
         const ptECEF = latLngToECEF(coord.lat, coord.lng, 0);
-        const localPos = ptECEF.applyQuaternion(quaternion).add(offset);
+        const localPos = ptECEF.applyQuaternion(enuRotation).add(offset);
         localPos.y += 15; // float slightly above terrain
         points.push(localPos);
       });
@@ -381,7 +412,7 @@ export function SimulationCanvas({
       const shape = new THREE.Shape();
       historicalFire.boundary.forEach((coord, idx) => {
         const ptECEF = latLngToECEF(coord.lat, coord.lng, 0);
-        const localPos = ptECEF.applyQuaternion(quaternion).add(offset);
+        const localPos = ptECEF.applyQuaternion(enuRotation).add(offset);
         if (idx === 0) {
           shape.moveTo(localPos.x, -localPos.z);
         } else {
@@ -412,7 +443,7 @@ export function SimulationCanvas({
 
     fireStations.forEach((station) => {
       const stnECEF = latLngToECEF(station.lat, station.lng, 0);
-      const localPos = stnECEF.clone().applyQuaternion(quaternion).add(offset);
+      const localPos = stnECEF.clone().applyQuaternion(enuRotation).add(offset);
 
       const stnModel = new THREE.Group();
 
@@ -447,7 +478,7 @@ export function SimulationCanvas({
     const selectedLocalPos = new THREE.Vector3(0, 0, 0); // centered POI
     if (selectedCell && selectedCell.lat !== undefined && selectedCell.lng !== undefined) {
       const selECEF = latLngToECEF(selectedCell.lat, selectedCell.lng, 0);
-      const localPos = selECEF.applyQuaternion(quaternion).add(offset);
+      const localPos = selECEF.applyQuaternion(enuRotation).add(offset);
       selectedLocalPos.copy(localPos);
     }
 
@@ -556,8 +587,20 @@ export function SimulationCanvas({
     const animate = () => {
       tiles.update();
 
-      // Smoothly pan camera target to selection
-      controls.target.lerp(targetLookAtRef.current, 0.08);
+      // Smoothly pan camera target to selection without fighting manual user panning
+      if (isPanningToTargetRef.current) {
+        const dist = controls.target.distanceTo(targetLookAtRef.current);
+        if (dist < 1.0) {
+          controls.target.copy(targetLookAtRef.current);
+          isPanningToTargetRef.current = false;
+        } else {
+          const oldTarget = controls.target.clone();
+          controls.target.lerp(targetLookAtRef.current, 0.08);
+          // Translate camera position along with target so the viewing angle does not rotate
+          const stepDelta = controls.target.clone().sub(oldTarget);
+          camera.position.add(stepDelta);
+        }
+      }
 
       // Highlight and animate nearest fire station beacon based on cell hover status
       const hoveredCellObj = cellsRef.current.find((c) => c.id === hoveredIdRef.current);
@@ -648,9 +691,11 @@ export function SimulationCanvas({
       const pos = cellPositionsRef.current[selectedCell.id];
       if (pos) {
         targetLookAtRef.current.copy(pos);
+        isPanningToTargetRef.current = true;
       }
     } else {
       targetLookAtRef.current.set(0, 0, 0);
+      isPanningToTargetRef.current = false;
     }
 
     // 2. Update grid cell selection highlight colors dynamically
