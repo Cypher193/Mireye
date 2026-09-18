@@ -8,15 +8,42 @@ export interface PredictiveSpreadState {
 }
 
 /**
+ * Optional ML enhancement options for the predictive spread computation.
+ * When provided, FireSenseNet-600M refined IPS values are blended with
+ * the Rothermel physics base rate.
+ */
+export interface MLSpreadOptions {
+  /**
+   * Per-cell ML-enhanced IPS values from FireSenseNet-600M forward pass.
+   * Must have same length as the cells array.
+   */
+  enhancedIPS: number[];
+  /**
+   * Blend weight α ∈ [0, 1]:
+   *   effectiveIPS = α · mlIPS + (1 − α) · rothermelIPS
+   * Default: 0.4 (40% ML, 60% physics)
+   */
+  blendAlpha?: number;
+}
+
+/**
  * Computes the fire spread propagation times for all cells in a grid,
  * simulating FireSenseNet / FireCast dynamics based on slope, fuel, and wind vector alignment.
+ *
+ * @param cells          HexCell grid
+ * @param ignitionCell   Origin fire cell
+ * @param windAngleDeg   Wind direction [degrees]
+ * @param windSpeedMph   Wind speed [mph]
+ * @param simTimeMin     Simulation time elapsed [minutes]
+ * @param mlOptions      Optional FireSenseNet-600M enhanced IPS (non-breaking)
  */
 export function computePredictiveSpread(
   cells: HexCell[],
   ignitionCell: HexCell | null,
   windAngleDeg: number,
   windSpeedMph: number,
-  simTimeMin: number
+  simTimeMin: number,
+  mlOptions?: MLSpreadOptions,
 ): Record<string, PredictiveSpreadState> {
   const result: Record<string, PredictiveSpreadState> = {};
   if (!ignitionCell || cells.length === 0) {
@@ -30,6 +57,13 @@ export function computePredictiveSpread(
   // Wind vector unit coordinates (direction of travel)
   const windX = Math.sin(windRad);
   const windY = -Math.cos(windRad);
+
+  // Build a fast index for ML-enhanced IPS lookup by cell ID
+  const mlIPSByCellId = new Map<string, number>();
+  if (mlOptions?.enhancedIPS && mlOptions.enhancedIPS.length === cells.length) {
+    cells.forEach((c, i) => mlIPSByCellId.set(c.id, mlOptions.enhancedIPS[i]));
+  }
+  const alpha = mlOptions?.blendAlpha ?? 0.4;
 
   cells.forEach((cell) => {
     if (cell.id === ignitionCell.id) {
@@ -58,9 +92,16 @@ export function computePredictiveSpread(
     const travelY = Math.cos(cellAngleRad);
     const windAlignment = travelX * windX + travelY * windY;
 
+    // ── Effective IPS: blend Rothermel physics with FireSenseNet-600M ML ──
+    const rothermelIPS = cell.ips;
+    const mlIPS        = mlIPSByCellId.get(cell.id) ?? rothermelIPS;
+    const effectiveIPS = mlIPSByCellId.size > 0
+      ? alpha * mlIPS + (1 - alpha) * rothermelIPS
+      : rothermelIPS;
+
     // ── Spread Rate Formulas (inspired by FireSenseNet & FireCast parameters) ──
     // Base rate driven by combustibility fuel proxy (canopy density and NDVI moisture)
-    const baseRate = 8.0 + cell.ips * 20.0; // meters per minute
+    const baseRate = 8.0 + effectiveIPS * 20.0; // meters per minute
 
     // Wind contribution: speeds up spread in downwind direction, slows upwind
     const windRate = windSpeedMph * 0.6 * windAlignment;
@@ -95,3 +136,5 @@ export function computePredictiveSpread(
 
   return result;
 }
+
+

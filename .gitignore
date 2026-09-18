@@ -25,3 +25,18 @@ dist-ssr
 # Agent artifacts
 implementation_plan.md
 coverage_combustibility.md
+
+# ── FireSenseNet-600M model weights (DO NOT COMMIT) ───────────────────────────
+# Trained ONNX weights are proprietary and must not be pushed to the repository.
+# Load from registry: https://registry.mireye.com/models/firesensenet
+# See do_not_push_model_weights.onnx for the full exclusion notice.
+*.onnx
+!do_not_push_model_weights.onnx
+
+# Weight / checkpoint directories
+weights/
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors

@@ -99,3 +99,45 @@ export interface StationRecord {
  * API loading status across the application.
  */
 export type ApiStatus = 'idle' | 'loading' | 'error' | 'ok';
+
+// ── FireSenseNet-600M ML Output Types ─────────────────────────────────────────
+
+/**
+ * PINNs loss breakdown from the Rothermel advection-diffusion PDE constraint.
+ * ∂I/∂t + v⃗·∇I = α∇²I + S(fuel, slope)
+ */
+export interface PINNsLossResult {
+  /** PDE residual: how well predictions satisfy Rothermel advection-diffusion */
+  pdeLoss:          number;
+  /** Boundary condition penalty: predictions outside [0,1] */
+  boundaryLoss:     number;
+  /** Initial condition: IPS at ignition cell = 1.0 */
+  initialCondLoss:  number;
+  /** Fuel conservation: Σfuel monotonically decreasing */
+  conservationLoss: number;
+  /** Data fidelity: MSE vs Rothermel physics IPS */
+  dataFidelityLoss: number;
+  /** Total weighted PINNs loss */
+  totalLoss:        number;
+  /** Per-cell PDE residuals for spatial visualisation */
+  cellResiduals:    number[];
+}
+
+/**
+ * Full output of the FireSenseNet-600M forward pass.
+ * Returned by FireSenseNet.forward(cells, windAngleDeg, windSpeedMph).
+ */
+export interface ModelOutput {
+  /** ML-enhanced IPS per cell [N], refined by GNN + attention + diffusion */
+  enhancedIPS:      number[];
+  /** Cross-attention weight matrix [N × N] — shows inter-cell attention */
+  attentionWeights: number[][];
+  /** Full PINNs physics loss decomposition */
+  pinnsLoss:        PINNsLossResult;
+  /** Raw GNN node embeddings [N × d_model_lite] for debugging */
+  gnnEmbeddings:    number[][];
+  /** Number of diffusion denoising steps completed */
+  diffusionSteps:   number;
+  /** ASCII model card string from getModelSummary() */
+  modelSummary:     string;
+}

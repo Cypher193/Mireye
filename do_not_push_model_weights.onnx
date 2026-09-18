@@ -1,0 +1,82 @@
+﻿##############################################################################
+#                                                                            #
+#   FireSenseNet-600M  —  MODEL WEIGHTS EXCLUSION NOTICE                     #
+#                                                                            #
+#   File    : do_not_push_model_weights.onnx                                 #
+#   Format  : ONNX (Open Neural Network Exchange), opset 17                  #
+#   Size    : ~2.4 GB (float32)  /  ~1.2 GB (float16)  /  ~0.6 GB (int8)   #
+#                                                                            #
+##############################################################################
+#
+#  !! DO NOT COMMIT TRAINED WEIGHTS TO THIS REPOSITORY !!
+#
+#  Model weights are excluded from version control due to the following:
+#
+#   1. PROPRIETARY RESTRICTION
+#      The FireSenseNet-600M weights are proprietary assets of the Mireye CCG
+#      Engine project and must not be distributed through public repositories.
+#
+#   2. FILE SIZE
+#      ~2.4 GB binary blobs are unsuitable for Git. Use Git-LFS or a dedicated
+#      model registry instead.
+#
+#   3. SECURITY
+#      Embedding weights in a public repo can expose training-data fingerprints
+#      and adversarial vulnerabilities.
+#
+##############################################################################
+#
+#  HOW TO OBTAIN WEIGHTS
+#  ─────────────────────
+#
+#   Production (authorised team members only):
+#     curl -H "Authorization: Bearer $MIREYE_MODEL_TOKEN" \
+#          https://registry.mireye.com/models/firesensenet/firesensenet_600m_v1.onnx \
+#          -o weights/firesensenet_600m_v1.onnx
+#
+#   Expected SHA-256 (v1.0.0-600M / float32):
+#     <sha256 hash provided through secure internal channel — not stored here>
+#
+#   ONNX Runtime inference:
+#     import * as ort from 'onnxruntime-web';
+#     const session = await ort.InferenceSession.create('weights/firesensenet_600m_v1.onnx');
+#
+##############################################################################
+#
+#  ARCHITECTURE REFERENCE  (weights correspond to modelConfig.ts)
+#
+#   Model          : FireSenseNet-600M v1.0.0
+#   Parameters     : ~590 M (float32)
+#   Components:
+#     ST-GNN (20 layers, d=1024)       ~336M params
+#     Cross-Attention (12 blocks)       ~201M params
+#     Diffusion Module (8 DDIM steps)   ~ 50M params
+#     Decoder + Misc                    ~  3M params
+#
+#   Input tensors (ONNX):
+#     cell_features   [batch, n_cells, 8]       float32
+#     adjacency_mask  [batch, n_cells, n_cells]  float32
+#     wind_vector     [batch, 2]                 float32
+#     time_step       [batch]                    int64
+#
+#   Output tensors (ONNX):
+#     enhanced_ips      [batch, n_cells]          float32
+#     attention_weights [batch, n_cells, n_cells] float32
+#     pinns_residuals   [batch, n_cells]          float32
+#
+#   Trained on    : Mireye CCG Engine wildfire dataset
+#   Physics loss  : Rothermel PDE (∂I/∂t + v·∇I = α∇²I + S)
+#   PINNS ref     : Raissi et al. 2019 (Nature)
+#   GNN ref       : Veličković et al. 2018 (GAT)
+#   Diffusion ref : Ho et al. 2020 (DDPM), Song et al. 2022 (DDIM)
+#
+##############################################################################
+#
+#  GITIGNORE STATUS:  This file is tracked in .gitignore under:
+#                     *.onnx  →  entire class of ONNX weight files excluded
+#                     weights/  →  weight directory excluded
+#
+#  This placeholder file itself is committed to document the exclusion.
+#  Any actual *.onnx weight file placed alongside this will be ignored by git.
+#
+##############################################################################
