@@ -92,12 +92,10 @@ export function computePredictiveSpread(
     const travelY = Math.cos(cellAngleRad);
     const windAlignment = travelX * windX + travelY * windY;
 
-    // ── Effective IPS: blend Rothermel physics with FireSenseNet-600M ML ──
-    const rothermelIPS = cell.ips;
-    const mlIPS        = mlIPSByCellId.get(cell.id) ?? rothermelIPS;
-    const effectiveIPS = mlIPSByCellId.size > 0
-      ? alpha * mlIPS + (1 - alpha) * rothermelIPS
-      : rothermelIPS;
+    // ── Use model's direct prediction (from Kaggle training) without hardcoded blend ──
+    const effectiveIPS = mlIPSByCellId.has(cell.id)
+      ? mlIPSByCellId.get(cell.id)!
+      : cell.ips;
 
     // ── Spread Rate Formulas (inspired by FireSenseNet & FireCast parameters) ──
     // Base rate driven by combustibility fuel proxy (canopy density and NDVI moisture)

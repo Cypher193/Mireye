@@ -59,3 +59,8 @@ export type { PINNsLossResult } from './pinnsLoss';
 
 // FireSenseNet — top-level model
 export { FireSenseNet, getFireSenseNet, resetFireSenseNet } from './fireSenseNet';
+
+// Universal Model Loader (ONNX & custom files)
+export { modelLoader } from './modelLoader';
+export type { ModelStatus, ModelInferenceResult } from './modelLoader';
+

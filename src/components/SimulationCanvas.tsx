@@ -6,6 +6,7 @@ import type { HexCell } from '@/types';
 import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers, CloudSun, RefreshCw, Zap, Cpu, Database } from 'lucide-react';
 import { getHistoricalFire } from '@/data/historicalFires';
 import { computePredictiveSpread } from '@/lib/predictiveSim';
+import { modelLoader, type ModelStatus } from '@/lib/ml/modelLoader';
 import {
   loadCachedSatelliteTexture,
   getCachedTerrainGeometry,
@@ -25,6 +26,7 @@ interface SimulationCanvasProps {
   cells: HexCell[];
   selectedCell: HexCell | null;
   hoveredId: string | null;
+  blendAlpha?: number;
   cameraState: {
     center: { lat: number; lng: number };
     zoom: number;
@@ -87,6 +89,7 @@ export function SimulationCanvas({
   cells,
   selectedCell,
   hoveredId,
+  blendAlpha = 0.4,
   cameraState,
   onCameraChange,
 }: SimulationCanvasProps) {
@@ -161,6 +164,36 @@ export function SimulationCanvas({
   const [simTime, setSimTime] = useState(0);
   const [windAngle, setWindAngle] = useState(45); // Degrees (0 = North, 90 = East)
   const [windSpeed, setWindSpeed] = useState(15); // mph
+
+  // Dynamic ML Model (FireSenseNet / Custom ONNX)
+  const [modelStatus, setModelStatus] = useState<ModelStatus>(modelLoader.getStatus());
+  const enhancedIPSRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return modelLoader.subscribe((s) => {
+      setModelStatus(s);
+      if (cells.length > 0) {
+        const idx = selectedCell ? cells.findIndex((c) => c.id === selectedCell.id) : -1;
+        const ignitionIdx = idx >= 0 ? idx : null;
+        modelLoader.runInference(cells, windAngle, windSpeed, ignitionIdx)
+          .then((res) => {
+            enhancedIPSRef.current = res.enhancedIPS;
+          })
+          .catch((err) => console.warn('[SimulationCanvas] ML inference error:', err));
+      }
+    });
+  }, [cells, windAngle, windSpeed, selectedCell]);
+
+  useEffect(() => {
+    if (cells.length === 0) return;
+    const idx = selectedCell ? cells.findIndex((c) => c.id === selectedCell.id) : -1;
+    const ignitionIdx = idx >= 0 ? idx : null;
+    modelLoader.runInference(cells, windAngle, windSpeed, ignitionIdx)
+      .then((res) => {
+        enhancedIPSRef.current = res.enhancedIPS;
+      })
+      .catch((err) => console.warn('[SimulationCanvas] ML inference error:', err));
+  }, [cells, windAngle, windSpeed, selectedCell]);
 
   // Real-time meteorological data (Open-Meteo / NOAA surface data)
   const [isFetchingWeather, setIsFetchingWeather] = useState(false);
@@ -937,7 +970,10 @@ export function SimulationCanvas({
             selectedCell,
             windAngle,
             windSpeed,
-            time
+            time,
+            enhancedIPSRef.current.length === cellsRef.current.length
+              ? { enhancedIPS: enhancedIPSRef.current, blendAlpha }
+              : undefined
           );
 
           burningCells = cellsRef.current.filter((c) => {
@@ -1245,8 +1281,15 @@ export function SimulationCanvas({
           })()
         ) : (
           <div className="mb-3 rounded border border-ink-850 bg-ink-900/30 p-2 text-[10px] text-ink-400 leading-normal">
-            <span className="font-bold text-cool-500 uppercase block mb-0.5">🧠 Predictive Simulation (FireSenseNet)</span>
-            Modeling fire propagation using client-side approximations of the <strong>FireSenseNet</strong> convolutional network and <strong>FireCast</strong> forecasting algorithms.
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-emerald-400 uppercase flex items-center gap-1">
+                🧠 {modelStatus.source === 'custom-onnx' ? `Custom Model (${modelStatus.name})` : 'FireSenseNet ML Engine'}
+              </span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">
+                {modelStatus.latencyMs > 0 ? `${modelStatus.latencyMs.toFixed(1)}ms` : 'active'}
+              </span>
+            </div>
+            Modeling fire propagation using {modelStatus.source === 'custom-onnx' ? `custom ONNX weights (${modelStatus.name})` : 'FireSenseNet spatio-temporal GNN'} blended ({(blendAlpha * 100).toFixed(0)}%) with Rothermel physics.
           </div>
         )}
 

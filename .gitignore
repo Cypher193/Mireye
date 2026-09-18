@@ -40,3 +40,9 @@ checkpoints/
 *.pth
 *.bin
 *.safetensors
+
+# Custom user model files (any model.* or public/model.*)
+model.*
+public/model.*
+weights/*
+

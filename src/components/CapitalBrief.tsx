@@ -43,8 +43,8 @@ export function CapitalBrief({
     const content = [
       `# Executive Capital Allocation Brief`,
       `**Region:** ${result.countyName}`,
-      `**Target Hex ID:** ${result.cellId.toUpperCase()}`,
-      `**Coverage-Combustibility Gap (CCG):** ${result.ccg.toFixed(3)}`,
+      `**Target Hex ID:** ${result.hexId.toUpperCase()}`,
+      `**Coverage-Combustibility Gap (CCG):** ${result.ccgScore.toFixed(3)}`,
       `**Ignition Propensity Score (IPS):** ${result.ips.toFixed(3)}`,
       `**Response Capacity Score (RCS):** ${result.rcs.toFixed(3)}`,
       `**Timestamp:** ${new Date().toLocaleString()}`,
@@ -58,7 +58,7 @@ export function CapitalBrief({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Capital_Brief_${result.countyName.replace(/\s+/g, '_')}_${result.cellId}.md`;
+    link.download = `Capital_Brief_${result.countyName.replace(/\s+/g, '_')}_${result.hexId}.md`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

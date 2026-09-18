@@ -10,7 +10,13 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  assetsInclude: ['**/*.onnx', '**/*.wasm'],
   optimizeDeps: {
-    exclude: ['lucide-react'],
+    exclude: ['lucide-react', 'onnxruntime-web'],
+  },
+  server: {
+    fs: {
+      allow: ['..'],
+    },
   },
 });

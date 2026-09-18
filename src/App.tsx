@@ -7,6 +7,7 @@ import { LocationSelector } from '@/components/LocationSelector';
 import { PhysicsBreakdown } from '@/components/PhysicsBreakdown';
 import { Phase2Card } from '@/components/Phase2Card';
 import { HowItWorksModal } from '@/components/HowItWorksModal';
+import { modelLoader } from '@/lib/ml/modelLoader';
 import {
   COUNTIES,
   fetchHexGrid,
@@ -21,6 +22,7 @@ import type { HexCell, County, ReasoningLine, ApiStatus } from '@/types';
 
 function App() {
   const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [blendAlpha] = useState(0.4);
   const [selectedCounty, setSelectedCounty] = useState<County>(COUNTIES[0]);
   const [selectedCell, setSelectedCell] = useState<HexCell | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -47,12 +49,15 @@ function App() {
   // USA overview hexes (deterministic, no API call — static county metadata)
   const usaHexes = useMemo(() => generateUSAMapHexes(), []);
 
-  // ── Phase 1: Verify Mireye field catalog on mount ─────────────────────
+  // ── Phase 1: Verify Mireye field catalog on mount & auto-detect custom models ─
   useEffect(() => {
     setApiStatus('loading');
     verifyWildfireFields()
       .then((status) => setApiStatus(status))
       .catch(() => setApiStatus('error'));
+
+    // Automatically check for local custom models (e.g. /model.onnx)
+    modelLoader.autoDetectModel().catch(() => {});
   }, []);
 
   // ── Phase 2+3: Fetch hex grid on county change ──────────────────────
@@ -64,7 +69,30 @@ function App() {
     setCells(generateHexGridSkeleton(selectedCounty.id));
 
     fetchHexGrid(selectedCounty.id)
-      .then((newCells) => {
+      .then(async (newCells) => {
+        // If custom model is loaded, apply its direct predictions to cells
+        const status = modelLoader.getStatus();
+        if (status.source === 'custom-onnx') {
+          try {
+            const mlRes = await modelLoader.runInference(newCells, 45, 15, null);
+            if (mlRes.enhancedIPS.length === newCells.length) {
+              newCells = newCells.map((c, i) => {
+                const modelIps = mlRes.enhancedIPS[i];
+                if (modelIps === undefined) return c;
+                const ccg = modelIps * (1 - c.rcs);
+                return {
+                  ...c,
+                  ips: modelIps,
+                  ccg,
+                  riskLabel: ccg >= 0.75 ? 'Severe' : ccg >= 0.5 ? 'High' : ccg >= 0.25 ? 'Moderate' : 'Low',
+                };
+              });
+            }
+          } catch (e) {
+            console.warn('[App] Model inference error:', e);
+          }
+        }
+
         setCells(newCells);
         setHexLoadStatus('ok');
 
@@ -81,6 +109,34 @@ function App() {
         // Keep skeleton on error so UI doesn't break
       });
   }, [selectedCounty.id, cacheBuster]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Update cells whenever custom model is loaded ──────────────────────────
+  useEffect(() => {
+    return modelLoader.subscribe(async (s) => {
+      if (s.source === 'custom-onnx' && cells.length > 0) {
+        try {
+          const mlRes = await modelLoader.runInference(cells, 45, 15, null);
+          if (mlRes.enhancedIPS.length === cells.length) {
+            setCells((prev) =>
+              prev.map((c, i) => {
+                const modelIps = mlRes.enhancedIPS[i];
+                if (modelIps === undefined) return c;
+                const ccg = modelIps * (1 - c.rcs);
+                return {
+                  ...c,
+                  ips: modelIps,
+                  ccg,
+                  riskLabel: ccg >= 0.75 ? 'Severe' : ccg >= 0.5 ? 'High' : ccg >= 0.25 ? 'Moderate' : 'Low',
+                };
+              })
+            );
+          }
+        } catch (e) {
+          console.warn('[App] Custom model update error:', e);
+        }
+      }
+    });
+  }, [cells]);
 
   // ── Sync selected cell when viewMode changes ───────────────────────────
   useEffect(() => {
@@ -154,7 +210,10 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-ink-950 text-ink-100">
-      <TopNav onHowItWorks={() => setShowHowItWorks(true)} onClearCache={handleClearCache} />
+      <TopNav
+        onHowItWorks={() => setShowHowItWorks(true)}
+        onClearCache={handleClearCache}
+      />
 
       {/* API Error Banner */}
       {apiError && (
@@ -249,6 +308,7 @@ function App() {
             visualizerMode={visualizerMode}
             onVisualizerModeChange={setVisualizerMode}
             phase2Active={phase2Active}
+            blendAlpha={blendAlpha}
           />
         </main>
       </div>

@@ -181,13 +181,6 @@ export async function fetchHexGrid(countyId: string): Promise<HexCell[]> {
   const cells: HexCell[] = [];
   const t0 = Date.now();
 
-  // Pre-generate 3 fallback stations for the county
-  const countyStations = [
-    { name: `${county.cityName || county.name} Fire Station 1`, lat: centerLat + 0.015, lng: centerLng - 0.02 },
-    { name: `${county.cityName || county.name} Fire Station 2`, lat: centerLat - 0.02, lng: centerLng + 0.025 },
-    { name: `${county.cityName || county.name} Fire Station 3`, lat: centerLat + 0.025, lng: centerLng + 0.015 },
-  ];
-
   // Warm-up call on county centroid to identify failed curated sets and prime cache
   console.log(`[HexGrid] Warm-up proximity API check at centroid...`);
   await fetchNearestStation(centerLat, centerLng);
@@ -210,30 +203,12 @@ export async function fetchHexGrid(countyId: string): Promise<HexCell[]> {
       // IPS — from real Mireye fields
       const ipsResult = computeIPS(rawFields);
 
-      // RCS — from real proximity API (will hit cache or instantly use fallback)
+      // RCS — from real proximity API or USFA registry
       const stationData = await fetchNearestStation(loc.lat, loc.lng);
-      
-      let finalStationName = stationData.name;
-      let finalStationLat = stationData.lat;
-      let finalStationLng = stationData.lng;
-      let finalDriveTime = stationData.driveTimeMin;
-
-      if (stationData.source === 'fallback') {
-        // Find the closest fallback station
-        let closestStn = countyStations[0];
-        let minDist = Infinity;
-        countyStations.forEach((stn) => {
-          const d = Math.hypot(loc.lat - stn.lat, loc.lng - stn.lng);
-          if (d < minDist) {
-            minDist = d;
-            closestStn = stn;
-          }
-        });
-        finalStationName = closestStn.name;
-        finalStationLat = closestStn.lat;
-        finalStationLng = closestStn.lng;
-        finalDriveTime = 5 + minDist * 300; // Realistic drive time based on distance
-      }
+      const finalStationName = stationData.name;
+      const finalStationLat = stationData.lat;
+      const finalStationLng = stationData.lng;
+      const finalDriveTime = stationData.driveTimeMin;
 
       const rcsResult = computeRCS(finalDriveTime, county.staffedStations);
 
@@ -315,10 +290,10 @@ export function generateHexGridSkeleton(countyId: string): HexCell[] {
         lat: cellLat,
         lng: cellLng,
         vertices: hexVertices(cx, cy, HEX_SIZE - 1.5),
-        ips: 0.35, rcs: 0.5, ccg: 0.25,
-        fuelProxy: 0.4, slope: 12, wind: 10, thermalInertia: 0.3,
-        driveTimeMin: 6, staffedStations: county.staffedStations ?? 4, housingUnits: 120,
-        wuiCluster: false, riskLabel: 'Moderate',
+        ips: 0, rcs: 0, ccg: 0,
+        fuelProxy: 0, slope: 0, wind: 0, thermalInertia: 0,
+        driveTimeMin: 0, staffedStations: county.staffedStations ?? 0, housingUnits: 0,
+        wuiCluster: false, riskLabel: 'Low',
       });
     }
   }
@@ -343,23 +318,21 @@ export function generateUSAMapHexes(): HexCell[] {
   const size = 7.4;
   const out: HexCell[] = [];
 
-  COUNTIES.forEach((county, cIdx) => {
+  COUNTIES.forEach((county) => {
     if (!county.cx || !county.cy) return;
 
-    // Use county-level CCG estimate from staffedStations ratio
-    const countyCCGEstimate = Math.max(0.1, Math.min(0.9, 1 - county.staffedStations / 20));
+    // Real Response Capacity from county staffed stations (NFPA 1710 benchmark)
+    const rcs = Math.min(1.0, Math.max(0.1, (county.staffedStations / 4) * 0.5 + 0.3));
+    // Physical risk baseline derived from real county WUI ratio
+    const wuiRatio = county.wuiHousingUnits / Math.max(county.population, 1);
+    const ips = Math.min(1.0, Math.max(0.1, wuiRatio * 2.5 + 0.2));
+    const ccg = computeCCG(ips, rcs);
+    const riskLabel = toRiskLabel(ccg);
 
     let idx = 0;
-    for (let q = -3; q <= 3; q++) {
-      for (let r = -3; r <= 3; r++) {
-        if (Math.abs(q + r) > 3) continue;
-        const dist = Math.sqrt(q * q + r * r + q * r);
-        const seed = cIdx * 97.13 + q * 12.9898 + r * 78.233;
-
-        const rawSin = Math.sin(seed) * 10000;
-        const rnd = rawSin - Math.floor(rawSin);
-        if (dist > 2.2 + rnd * 0.8) continue;
-        if (rnd < 0.14) continue;
+    for (let q = -2; q <= 2; q++) {
+      for (let r = -2; r <= 2; r++) {
+        if (Math.abs(q + r) > 2) continue;
 
         const dx = size * 1.5 * q;
         const dy = size * Math.sqrt(3) * (r + q / 2);
@@ -373,35 +346,6 @@ export function generateUSAMapHexes(): HexCell[] {
         }
         const vertices = pts.join(' ');
 
-        // Deterministic CCG variation around county-level estimate
-        const base = Math.max(0.04, Math.min(0.97, countyCCGEstimate + (rnd - 0.5) * 0.3));
-        const ccg = Math.round(base * 100) / 100;
-
-        const sinIps = Math.sin(seed + 1) * 10000;
-        const ips = Math.max(0.03, Math.min(0.98,
-          Math.round((ccg + (sinIps - Math.floor(sinIps) - 0.5) * 0.28) * 100) / 100
-        ));
-
-        const sinRcs = Math.sin(seed + 2) * 10000;
-        const rcs = Math.max(0.03, Math.min(0.97,
-          Math.round((1 - ccg + (sinRcs - Math.floor(sinRcs) - 0.5) * 0.3) * 100) / 100
-        ));
-
-        const sinSlope = Math.sin(seed + 3) * 10000;
-        const slopeVal = (sinSlope - Math.floor(sinSlope));
-
-        const sinFuel = Math.sin(seed + 4) * 10000;
-        const fuelVal = (sinFuel - Math.floor(sinFuel));
-
-        const sinWind = Math.sin(seed + 5) * 10000;
-        const windVal = (sinWind - Math.floor(sinWind));
-
-        const sinTherm = Math.sin(seed + 6) * 10000;
-        const thermVal = (sinTherm - Math.floor(sinTherm));
-
-        const sinDrive = Math.sin(seed + 8) * 10000;
-        const driveTimeMin = Math.round((4.1 + (sinDrive - Math.floor(sinDrive)) * 21.3) * 10) / 10;
-
         out.push({
           id: `${county.id}-uh${idx.toString().padStart(2, '0')}`,
           row: q,
@@ -412,15 +356,15 @@ export function generateUSAMapHexes(): HexCell[] {
           ips,
           rcs,
           ccg,
-          fuelProxy: fuelVal,
-          slope: slopeVal,
-          wind: windVal,
-          thermalInertia: thermVal,
-          driveTimeMin,
-          staffedStations: Math.max(1, Math.round(4 - ccg * 3 + rnd * 2)),
-          housingUnits: Math.round(50 + ccg * 450 + rnd * 100),
+          fuelProxy: ips,
+          slope: 10,
+          wind: 10,
+          thermalInertia: 0.5,
+          driveTimeMin: Math.max(4, Math.round(6 / Math.max(rcs, 0.1))),
+          staffedStations: county.staffedStations,
+          housingUnits: Math.round(county.wuiHousingUnits / 7),
           wuiCluster: true,
-          riskLabel: ccg >= 0.75 ? 'Severe' : ccg >= 0.5 ? 'High' : ccg >= 0.25 ? 'Moderate' : 'Low',
+          riskLabel,
           state: county.state,
           county: county.name,
           region: county.id,

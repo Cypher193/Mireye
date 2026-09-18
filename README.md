@@ -86,6 +86,21 @@ Where:
 
 ---
 
+### 🧠 6. FireSenseNet-600M & Custom Model Inference Engine
+- **Hybrid Physics + Deep Learning**: Blends empirical Rothermel surface fire equations with deep learning predictions to model complex topographic wind corridors and non-linear firebrand spotting.
+- **Architecture Stack (`src/lib/ml/`)**:
+  - **ST-GNN (Spatio-Temporal Graph Neural Network)**: Message passing over 64-hexagonal cell topologies based on slope and elevation gradients.
+  - **Multi-Head Cross-Attention**: Attends spatial cell tokens to live NOAA meteorological vectors (wind speed, wind azimuth, humidity) and long-distance ember spotting.
+  - **Conditional Diffusion Denoising (DDPM)**: Refines spread trajectories under wind gust uncertainty.
+  - **PINNs Loss Function**: Enforces Rothermel Advection-Diffusion PDE constraints ($\frac{\partial I}{\partial t} + \vec{v} \cdot \nabla I = \alpha \nabla^2 I + S$) to prevent non-physical predictions.
+- **Automatic Custom Model Loading (`model.*`)**:
+  - Simply drop your custom model at **`public/model.onnx`** or **`weights/model.onnx`** (supports any `model.*` format).
+  - The **Universal Model Loader** ([modelLoader.ts](file:///c:/Users/Lenovo/Documents/Hack/Mireye/src/lib/ml/modelLoader.ts)) automatically discovers and loads the file into **ONNX Web Runtime (WebAssembly / WebGPU)** on application boot.
+  - **Zero-Friction Fallback**: If no custom model file is present, the engine runs the browser-native **FireSenseNet-600M Lite** model (< 200ms forward pass) with zero configuration.
+  - **Git-Protected**: `.gitignore` automatically blocks any `model.*`, `public/model.*`, or `weights/*` binary files from ever being committed to Git.
+
+---
+
 ## 4. Architecture Overview
 
 ```mermaid
@@ -94,6 +109,16 @@ graph TD
     B --> C[National 2D Map Canvas]
     B --> D[3D Digital Twin SimulationCanvas]
     
+    subgraph Machine Learning & Model Pipeline
+        ML[Universal Model Loader] --> ML1[Auto-Detect public/model.onnx]
+        ML1 -->|Custom Model Found| ML2[ONNX Web Runtime - WASM/WebGPU]
+        ML1 -->|No Custom File| ML3[FireSenseNet-600M Lite TS Engine]
+        ML2 --> PINN[PINNs Physics Constraints]
+        ML3 --> PINN
+        PINN --> BLEND[Alpha Blending: ML + Rothermel Physics]
+        BLEND --> D
+    end
+
     subgraph 3D Simulation Architecture
         D --> E[Three.js Scene Compositor]
         D --> F[WebGPU Compute Engine - WGSL]
@@ -115,13 +140,35 @@ graph TD
     subgraph Data & Telemetry Services
         D --> L[NOAA / Open-Meteo Surface Weather]
         D --> M[CAL FIRE FRAP Historical Perimeters]
-        D --> N[FireSenseNet & FireCast Algorithms]
+        D --> N[Mireye Earth API - USGS DEM / NDVI / NLCD]
     end
 ```
 
 ---
 
-## 5. Quick Start
+## 5. Adding Your Custom Model
+
+To run your own trained model in the 3D wildfire simulation:
+
+1. **Place your model file in the project**:
+   ```bash
+   # Copy your model to the public folder:
+   cp /path/to/your/model.onnx public/model.onnx
+   # (or place it in weights/model.onnx)
+   ```
+2. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
+3. **Automatic Execution**:
+   - The app auto-detects `public/model.onnx` on launch.
+   - The top navigation bar displays: **`🟢 Model: model.onnx`** with live execution latency.
+   - Predictions immediately drive the 3D wildfire spread simulation.
+   - All `model.*` files are pre-configured in `.gitignore` and will never be tracked or committed to GitHub.
+
+---
+
+## 6. Quick Start
 
 ### Prerequisites
 - **Node.js**: `v18.0.0` or higher (recommended: Node 20 LTS)
@@ -132,7 +179,7 @@ graph TD
 ```bash
 # 1. Clone the repository
 git clone https://github.com/Cypher193/Mireye.git
-cd Mireye/mireye-test
+cd Mireye
 
 # 2. Install dependencies
 npm install
@@ -145,34 +192,47 @@ Open your browser at **`http://localhost:5173/`**.
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 ```
-mireye-test/
+Mireye/
 ├── src/
 │   ├── components/
 │   │   ├── SimulationCanvas.tsx     # 3D WebGPU & Three.js digital twin canvas
-│   │   ├── NationalMap.tsx          # 50-State interactive USA vector map
-│   │   ├── Header.tsx               # State/County selectors & active telemetry
-│   │   ├── MetricCard.tsx           # WUI & CCG metric status panels
-│   │   └── HexGrid.tsx              # 2D SVG H3 risk overlay
+│   │   ├── GoogleMap.tsx            # Standard 3D vector GIS map
+│   │   ├── HexMap.tsx               # 64-hex county risk grid
+│   │   ├── TopNav.tsx               # Header with live model & connection status
+│   │   ├── MetricCards.tsx          # WUI, IPS, RCS, CCG metric status panels
+│   │   └── CapitalBrief.tsx         # Automated executive capital brief generator
 │   ├── services/
 │   │   ├── webGpuCompute.ts         # WGSL compute shaders (fire spread & particles)
 │   │   └── renderCache.ts           # IndexedDB & geometry cache pool
 │   ├── lib/
-│   │   ├── predictiveSim.ts         # Rothermel & FireSenseNet CPU algorithms
-│   │   └── mireyeApi.ts             # Mireye environmental platform API client
+│   │   ├── ml/                      # FireSenseNet-600M & ML Architecture
+│   │   │   ├── modelLoader.ts       # Universal ONNX / custom model runtime loader
+│   │   │   ├── fireSenseNet.ts      # Top-level model orchestrator
+│   │   │   ├── fireGNN.ts           # Spatio-Temporal Graph Neural Network
+│   │   │   ├── crossAttention.ts    # Multi-head attention & ember spotting
+│   │   │   ├── diffusionModule.ts   # DDPM probabilistic spread refinement
+│   │   │   ├── pinnsLoss.ts         # Physics-Informed Neural Network (PDE loss)
+│   │   │   ├── modelConfig.ts       # Hyperparameters & ONNX specs
+│   │   │   └── tensor.ts            # Dependency-free browser tensor algebra
+│   │   ├── predictiveSim.ts         # Hybrid ML + Rothermel fire spread calculation
+│   │   ├── ipsEngine.ts             # Rothermel Ignition Propensity model
+│   │   ├── rcsEngine.ts             # NFPA 1710 Response Capacity model
+│   │   └── mireyeClient.ts          # Mireye Earth API client
 │   ├── data/
+│   │   ├── counties.ts              # 50-state WUI county dataset
 │   │   ├── hexGrid.ts               # H3 cell generators & 50-state geocoding
-│   │   ├── historicalFires.ts       # CAL FIRE FRAP historical perimeter data
-│   │   └── USAMapPaths.ts           # 50-state SVG boundary path data
-│   ├── types.ts                     # Core domain interfaces (HexCell, County)
+│   │   └── historicalFires.ts       # CAL FIRE FRAP historical perimeter data
+│   ├── types.ts                     # Core domain interfaces (HexCell, County, ModelOutput)
 │   ├── App.tsx                      # Root application state & navigation router
 │   └── main.tsx                     # React root mount point
-├── public/                          # Static web assets
+├── public/                          # Static web assets & custom model folder (public/model.onnx)
+├── weights/                         # External model weights directory (ignored by git)
 ├── HOW_TO_RUN.md                    # Detailed execution & troubleshooting guide
 ├── package.json                     # Dependencies & CLI scripts
-├── vite.config.ts                   # Vite bundler configuration
+├── vite.config.ts                   # Vite bundler configuration (ONNX/WASM enabled)
 └── tsconfig.json                    # TypeScript compiler options
 ```
 

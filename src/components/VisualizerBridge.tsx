@@ -18,10 +18,11 @@ interface VisualizerBridgeProps {
   visualizerMode: 'gis' | 'simulation';
   onVisualizerModeChange: (mode: 'gis' | 'simulation') => void;
   phase2Active: boolean;
+  blendAlpha?: number;
 }
 
 export function VisualizerBridge(props: VisualizerBridgeProps) {
-  const { visualizerMode, onVisualizerModeChange, ...rest } = props;
+  const { visualizerMode, onVisualizerModeChange, blendAlpha, ...rest } = props;
 
   // Shared camera spatial state (Strict North-up 0-degree planar default)
   const [cameraState, setCameraState] = useState({
@@ -51,6 +52,7 @@ export function VisualizerBridge(props: VisualizerBridgeProps) {
           cells={props.cells}
           selectedCell={selectedCellObj}
           hoveredId={props.hoveredId}
+          blendAlpha={blendAlpha}
           cameraState={cameraState}
           onCameraChange={setCameraState}
         />

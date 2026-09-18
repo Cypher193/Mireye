@@ -1,4 +1,6 @@
-import { Hexagon, RefreshCw } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Hexagon, RefreshCw, Cpu, Sparkles } from 'lucide-react';
+import { modelLoader, type ModelStatus } from '@/lib/ml/modelLoader';
 
 interface TopNavProps {
   onHowItWorks: () => void;
@@ -9,6 +11,12 @@ export function TopNav({
   onHowItWorks,
   onClearCache,
 }: TopNavProps) {
+  const [modelStatus, setModelStatus] = useState<ModelStatus>(modelLoader.getStatus());
+
+  useEffect(() => {
+    return modelLoader.subscribe((s) => setModelStatus(s));
+  }, []);
+
   return (
     <header className="relative z-30 flex h-14 items-center justify-between border-b border-ink-800 bg-ink-950/80 px-4 backdrop-blur-md lg:px-6 select-none">
       {/* Logo */}
@@ -31,7 +39,30 @@ export function TopNav({
       </div>
 
       {/* Right Actions */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
+        {/* Model Status Badge */}
+        <div
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold ${
+            modelStatus.source === 'custom-onnx'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+              : 'border-ink-800 bg-ink-900/60 text-ink-300'
+          }`}
+          title={
+            modelStatus.source === 'custom-onnx'
+              ? `Running custom model: ${modelStatus.name} (${modelStatus.latencyMs.toFixed(1)}ms)`
+              : 'Running built-in FireSenseNet ML Engine'
+          }
+        >
+          <Cpu className="h-3.5 w-3.5 text-heat-400" />
+          <span className="truncate max-w-[160px]">
+            {modelStatus.source === 'custom-onnx' ? modelStatus.name : 'Model: FireSenseNet'}
+          </span>
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+        </div>
+
         <button
           onClick={onClearCache}
           className="flex items-center gap-1.5 rounded-md border border-ink-800 bg-ink-900/30 px-3 py-1.5 text-xs font-medium text-ink-400 transition-colors hover:bg-ink-800 hover:text-ink-100"
@@ -50,3 +81,4 @@ export function TopNav({
     </header>
   );
 }
+
