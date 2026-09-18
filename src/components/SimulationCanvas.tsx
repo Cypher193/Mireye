@@ -4,7 +4,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TilesRenderer } from '3d-tiles-renderer';
 import type { HexCell } from '@/types';
 import { Play, Square, RotateCcw, Wind, Shield, Flame, Layers, CloudSun, RefreshCw, Zap, Cpu, Database } from 'lucide-react';
-import { getHistoricalFire } from '@/data/historicalFires';
 import { computePredictiveSpread } from '@/lib/predictiveSim';
 import { modelLoader, type ModelStatus } from '@/lib/ml/modelLoader';
 import {
@@ -554,54 +553,8 @@ export function SimulationCanvas({
     scene.add(gridGroup);
     cellMeshesRef.current = cellMeshes;
 
-    // 8.6. Render Historical Fire Footprint Outline (Option A)
+    // 8.6. Historical Footprint Group (Empty / Predictive Mode Active)
     const historicalLineGroup = new THREE.Group();
-    const historicalFire = getHistoricalFire(countyId);
-
-    if (historicalFire && historicalFire.boundary.length > 0) {
-      const points: THREE.Vector3[] = [];
-      historicalFire.boundary.forEach((coord) => {
-        const ptECEF = latLngToECEF(coord.lat, coord.lng, 0);
-        const localPos = ptECEF.applyQuaternion(enuRotation).add(offset);
-        localPos.y = getTerrainElevation(localPos.x, localPos.z) + 15; // float slightly above terrain
-        points.push(localPos);
-      });
-      historicalLocalPointsRef.current = points;
-
-      const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
-      const lineMat = new THREE.LineBasicMaterial({
-        color: 0xea580c, // Fire orange
-        linewidth: 3,
-      });
-      const lineLoop = new THREE.LineLoop(lineGeom, lineMat);
-      historicalLineGroup.add(lineLoop);
-
-      // Create a translucent polygon shape fill representing the fire region
-      const shape = new THREE.Shape();
-      historicalFire.boundary.forEach((coord, idx) => {
-        const ptECEF = latLngToECEF(coord.lat, coord.lng, 0);
-        const localPos = ptECEF.applyQuaternion(enuRotation).add(offset);
-        if (idx === 0) {
-          shape.moveTo(localPos.x, -localPos.z);
-        } else {
-          shape.lineTo(localPos.x, -localPos.z);
-        }
-      });
-
-      const shapeGeom = new THREE.ShapeGeometry(shape);
-      const shapeMat = new THREE.MeshBasicMaterial({
-        color: 0xdc2626, // Red glow
-        transparent: true,
-        opacity: 0.15,
-        side: THREE.DoubleSide,
-      });
-      const shapeMesh = new THREE.Mesh(shapeGeom, shapeMat);
-      shapeMesh.rotation.x = -Math.PI / 2; // Flat
-      shapeMesh.position.y = 10; // Sit slightly above grid base
-      historicalLineGroup.add(shapeMesh);
-      
-      historicalLineGroup.visible = (simModeRef.current === 'historical');
-    }
     scene.add(historicalLineGroup);
     historicalLineGroupRef.current = historicalLineGroup;
 
@@ -997,17 +950,9 @@ export function SimulationCanvas({
         }
       }
 
-      // Animate historical footprint scaling if Option A is active
+      // Hide historical footprint if any
       const historicalLineGroup = historicalLineGroupRef.current;
-      if (simModeRef.current === 'historical' && historicalLineGroup) {
-        historicalLineGroup.visible = true;
-        const scale = Math.min(1.0, 0.2 + time * 0.02);
-        historicalLineGroup.scale.set(scale, 1.0, scale);
-        const shapeMesh = historicalLineGroup.children[1] as THREE.Mesh;
-        if (shapeMesh && shapeMesh.material) {
-          (shapeMesh.material as THREE.MeshBasicMaterial).opacity = Math.min(0.35, 0.05 + time * 0.005);
-        }
-      } else if (historicalLineGroup) {
+      if (historicalLineGroup) {
         historicalLineGroup.visible = false;
       }
 
@@ -1026,13 +971,10 @@ export function SimulationCanvas({
 
       // Find emitter origin
       let emitterPos = origin;
-      if (simModeRef.current === 'predictive' && burningCells.length > 0) {
+      if (burningCells.length > 0) {
         const rc = burningCells[Math.floor(Math.random() * burningCells.length)];
         const pos = cellPositionsRef.current[rc.id];
         if (pos) emitterPos = pos;
-      } else if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
-        const pt = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
-        emitterPos = pt;
       }
 
       renderControllerRef.current.keepAlive(10);
@@ -1076,13 +1018,10 @@ export function SimulationCanvas({
 
           // Find emitter origin
           let emitterPos = origin;
-          if (simModeRef.current === 'predictive' && burningCells.length > 0) {
+          if (burningCells.length > 0) {
             const rc = burningCells[Math.floor(Math.random() * burningCells.length)];
             const pos = cellPositionsRef.current[rc.id];
             if (pos) emitterPos = pos;
-          } else if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
-            const pt = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
-            emitterPos = pt;
           }
 
           if (positions[i * 3 + 1] > emitterPos.y + 800 + Math.random() * 300) {
@@ -1110,15 +1049,10 @@ export function SimulationCanvas({
       (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
     });
 
-    // Reset historical line group scale and visibility
+    // Reset historical line group
     const historicalLineGroup = historicalLineGroupRef.current;
     if (historicalLineGroup) {
-      historicalLineGroup.visible = (simModeRef.current === 'historical');
-      historicalLineGroup.scale.set(1.0, 1.0, 1.0);
-      const shapeMesh = historicalLineGroup.children[1] as THREE.Mesh;
-      if (shapeMesh && shapeMesh.material) {
-        (shapeMesh.material as THREE.MeshBasicMaterial).opacity = 0.15;
-      }
+      historicalLineGroup.visible = false;
     }
 
     // Reset particles back to seed points
@@ -1141,10 +1075,7 @@ export function SimulationCanvas({
     if (fireGeom) {
       const positions = fireGeom.attributes.position.array as Float32Array;
       for (let i = 0; i < particleCount; i++) {
-        let emitterPos = origin;
-        if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
-          emitterPos = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
-        }
+        const emitterPos = origin;
         positions[i * 3] = emitterPos.x + (Math.random() - 0.5) * 100;
         positions[i * 3 + 1] = emitterPos.y + Math.random() * 50;
         positions[i * 3 + 2] = emitterPos.z + (Math.random() - 0.5) * 100;
@@ -1155,10 +1086,7 @@ export function SimulationCanvas({
     if (smokeGeom) {
       const positions = smokeGeom.attributes.position.array as Float32Array;
       for (let i = 0; i < particleCount; i++) {
-        let emitterPos = origin;
-        if (simModeRef.current === 'historical' && historicalLocalPointsRef.current.length > 0) {
-          emitterPos = historicalLocalPointsRef.current[Math.floor(Math.random() * historicalLocalPointsRef.current.length)];
-        }
+        const emitterPos = origin;
         positions[i * 3] = emitterPos.x + (Math.random() - 0.5) * 100;
         positions[i * 3 + 1] = emitterPos.y + Math.random() * 100;
         positions[i * 3 + 2] = emitterPos.z + (Math.random() - 0.5) * 100;
@@ -1237,61 +1165,18 @@ export function SimulationCanvas({
           </div>
         </div>
 
-        {/* Toggle between Option A (Historical) and Option B (Predictive Model) */}
-        <div className="flex rounded bg-ink-900/60 p-0.5 border border-ink-800 mb-3 text-[10px] font-bold uppercase">
-          <button
-            onClick={() => {
-              setSimMode('predictive');
-              handleReset();
-            }}
-            className={`flex-1 rounded py-1 transition-colors ${
-              simMode === 'predictive'
-                ? 'bg-ink-800 text-ink-100 shadow-sm border border-ink-700/50'
-                : 'text-ink-400 hover:text-ink-200'
-            }`}
-          >
-            Predictive Model (Option B)
-          </button>
-          <button
-            onClick={() => {
-              setSimMode('historical');
-              handleReset();
-            }}
-            className={`flex-1 rounded py-1 transition-colors ${
-              simMode === 'historical'
-                ? 'bg-ink-800 text-ink-100 shadow-sm border border-ink-700/50'
-                : 'text-ink-400 hover:text-ink-200'
-            }`}
-          >
-            Historical Preset (Option A)
-          </button>
-        </div>
-
-        {/* Selected Simulation Mode description metadata */}
-        {simMode === 'historical' ? (
-          (() => {
-            const countyId = selectedCell?.region ?? cells[0]?.region ?? 'boulder-co';
-            const histFire = getHistoricalFire(countyId);
-            return (
-              <div className="mb-3 rounded border border-ink-850 bg-ink-900/30 p-2 text-[10px] text-ink-400 leading-normal">
-                <span className="font-bold text-heat-500 uppercase block mb-0.5">📂 CAL FIRE FRAP Dataset Active</span>
-                Replaying the historical footprint of the <strong>{histFire.name} ({histFire.year})</strong> which burned approximately <strong>{histFire.acres.toLocaleString()} acres</strong> in this region.
-              </div>
-            );
-          })()
-        ) : (
-          <div className="mb-3 rounded border border-ink-850 bg-ink-900/30 p-2 text-[10px] text-ink-400 leading-normal">
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold text-emerald-400 uppercase flex items-center gap-1">
-                🧠 {modelStatus.source === 'custom-onnx' ? `Custom Model (${modelStatus.name})` : 'FireSenseNet ML Engine'}
-              </span>
-              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">
-                {modelStatus.latencyMs > 0 ? `${modelStatus.latencyMs.toFixed(1)}ms` : 'active'}
-              </span>
-            </div>
-            Modeling fire propagation using {modelStatus.source === 'custom-onnx' ? `custom ONNX weights (${modelStatus.name})` : 'FireSenseNet spatio-temporal GNN'} blended ({(blendAlpha * 100).toFixed(0)}%) with Rothermel physics.
+        {/* ML Engine Active Simulation Status Card */}
+        <div className="mb-3 rounded border border-ink-850 bg-ink-900/30 p-2 text-[10px] text-ink-400 leading-normal">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-bold text-emerald-400 uppercase flex items-center gap-1">
+              🧠 {modelStatus.source === 'custom-onnx' ? `Custom Model (${modelStatus.name})` : 'FireSenseNet ML Engine'}
+            </span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono">
+              {modelStatus.latencyMs > 0 ? `${modelStatus.latencyMs.toFixed(1)}ms` : 'active'}
+            </span>
           </div>
-        )}
+          Modeling fire propagation using {modelStatus.source === 'custom-onnx' ? `custom ONNX weights (${modelStatus.name})` : 'spatio-temporal ML'} blended ({(blendAlpha * 100).toFixed(0)}%) with Rothermel physics.
+        </div>
 
         {/* Playback Controls */}
         <div className="flex items-center gap-2 mb-4">

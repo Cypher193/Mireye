@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import type { HexCell } from '@/types';
 import { USA_STATE_PATHS } from './USAMapPaths';
-import { COUNTIES } from '@/data/hexGrid';
+import { COUNTIES } from '@/lib/locations';
 
 interface HexMapProps {
   cells: HexCell[];

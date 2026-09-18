@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import type { HexCell, County } from '@/types';
 import * as THREE from 'three';
-import { COUNTIES } from '@/data/hexGrid';
+import { COUNTIES } from '@/lib/locations';
 import { MapPin } from 'lucide-react';
 
 interface GoogleMapProps {

@@ -15,8 +15,8 @@ import {
   getTopRiskHexes,
   generateUSAMapHexes,
   clearHexCache,
-} from '@/data/hexGrid';
-import { buildReasoningTrace } from '@/data/reasoning';
+} from '@/lib/grid';
+import { buildReasoningTrace } from '@/lib/reasoning';
 import { verifyWildfireFields } from '@/lib/mireyeClient';
 import type { HexCell, County, ReasoningLine, ApiStatus } from '@/types';
 
