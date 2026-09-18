@@ -23,7 +23,7 @@ The project codebase is fully synchronized with the GitHub remote repository.
   * Root Workspace: `c:\Users\joshi\learning\mireye`
   * Active Application & Git Root: `c:\Users\joshi\learning\mireye\mireye-test`
 * **Active Branch:** `main` (tracked to `origin/main` and mirrored to `origin/Deepanshu`)
-* **Latest Synchronized Commit:** `0d25759` — *`perf: optimize 3d simulation controls to prevent canvas rebuilds and smoothly pan focus on selection change`*
+* **Latest Synchronized Commit:** `930697d` — *`docs: add comprehensive README.md with mathematical formulation and architecture`*
 * **Working Tree State:** Clean, 0 uncommitted changes, 0 untracked files, 0 merge conflicts.
 
 ---
