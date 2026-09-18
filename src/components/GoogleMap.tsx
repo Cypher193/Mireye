@@ -30,18 +30,18 @@ interface GoogleMapProps {
   }) => void;
 }
 
-// Risk color mapping matching the CCG theme
+// Risk color mapping matching the CCG theme (Lighter luminous palette)
 function riskColor(ccg: number): string {
-  if (ccg >= 0.75) return '#DC2626'; // Severe: Red
-  if (ccg >= 0.5) return '#EA580C';  // High: Orange
-  if (ccg >= 0.3) return '#F59E0B';  // Elev: Amber
-  if (ccg >= 0.15) return '#FBBF24'; // Mod: Yellow
-  return '#1E3A5F';                  // Low: Navy Blue
+  if (ccg >= 0.75) return '#F87171'; // Lighter soft red (was #DC2626)
+  if (ccg >= 0.5) return '#FB923C';  // Lighter soft orange (was #EA580C)
+  if (ccg >= 0.3) return '#FCD34D';  // Lighter amber (was #F59E0B)
+  if (ccg >= 0.15) return '#FDE047'; // Lighter yellow (was #FBBF24)
+  return '#60A5FA';                  // Lighter bright sky blue (was dark navy #1E3A5F)
 }
 
 function riskOpacity(ccg: number): number {
-  if (ccg < 0.1) return 0.1;
-  return 0.2 + ccg * 0.5;
+  if (ccg < 0.1) return 0.08;
+  return 0.12 + ccg * 0.30; // ~35% lighter fill (was 0.2 + ccg * 0.5)
 }
 
 // Dynamically load Google Maps script
@@ -139,8 +139,8 @@ export function GoogleMap({
     mapRef.current = new google.maps.Map(containerRef.current, {
       center: cameraState?.center ?? { lat: 37.0902, lng: -95.7129 },
       zoom: cameraState?.zoom ?? 4,
-      heading: cameraState?.heading ?? 0,
-      tilt: cameraState?.tilt ?? 45,
+      heading: 0, // Lock strictly to 0 to prevent 90-degree disorientation
+      tilt: 0,    // Top-down 2D prevents oblique camera twist
       mapTypeId: google.maps.MapTypeId.ROADMAP, // Light roadmap by default
       mapId: 'DEMO_MAP_ID', // Enable Vector Rendering engine for WebGLOverlayView
       renderingType: 'VECTOR',
@@ -181,8 +181,6 @@ export function GoogleMap({
     const listeners = [
       map.addListener('center_changed', onMapCameraChange),
       map.addListener('zoom_changed', onMapCameraChange),
-      map.addListener('heading_changed', onMapCameraChange),
-      map.addListener('tilt_changed', onMapCameraChange),
     ];
 
     return () => {
@@ -203,12 +201,12 @@ export function GoogleMap({
     const headingDiff = Math.abs((map.getHeading() ?? 0) - cameraState.heading);
     const tiltDiff = Math.abs((map.getTilt() ?? 0) - cameraState.tilt);
 
-    if (latDiff > 0.0001 || lngDiff > 0.0001 || zoomDiff > 0.1 || headingDiff > 1 || tiltDiff > 1) {
+    if (latDiff > 0.0001 || lngDiff > 0.0001 || zoomDiff > 0.1) {
       map.setOptions({
         center: cameraState.center,
         zoom: cameraState.zoom,
-        heading: cameraState.heading,
-        tilt: cameraState.tilt,
+        heading: 0,
+        tilt: 0,
       });
     }
   }, [cameraState]);
@@ -321,6 +319,8 @@ export function GoogleMap({
     if (viewMode === 'usa') {
       map.setCenter({ lat: 37.0902, lng: -95.7129 });
       map.setZoom(4);
+      map.setHeading(0);
+      map.setTilt(0);
     } else if (viewMode === 'county' && cells.length > 0) {
       // Find center coordinate of the grid cells
       const lats = cells.map((c) => c.lat).filter((l): l is number => typeof l === 'number');
@@ -330,6 +330,8 @@ export function GoogleMap({
         const avgLng = lngs.reduce((a, b) => a + b, 0) / lngs.length;
         map.setCenter({ lat: avgLat, lng: avgLng });
         map.setZoom(13); // Zoom to local scale
+        map.setHeading(0); // Strictly preserve North-up orientation (0 degrees)
+        map.setTilt(0);
       }
     }
   }, [viewMode, cells]);
@@ -362,13 +364,13 @@ export function GoogleMap({
         const maxCcg = countyCells.length > 0 ? Math.max(...countyCells.map((c) => c.ccg)) : 0.5;
         const color = riskColor(maxCcg);
 
-        // County interactive circle
+        // County interactive circle (lighter fill + solid border)
         const circle = new google.maps.Circle({
           strokeColor: color,
-          strokeOpacity: 0.8,
-          strokeWeight: 1.5,
+          strokeOpacity: 1.0, // 20% more solid (was 0.8)
+          strokeWeight: 2.0,  // more solid boundary (was 1.5)
           fillColor: color,
-          fillOpacity: 0.35,
+          fillOpacity: 0.22,  // lighter fill (was 0.35)
           map,
           center: { lat: county.lat, lng: county.lng },
           radius: 50000, // 50km radius on USA map
@@ -433,10 +435,10 @@ export function GoogleMap({
 
         const circle = new google.maps.Circle({
           strokeColor: isSelected ? '#FFFFFF' : isHovered ? '#CBD5E1' : color,
-          strokeOpacity: isSelected ? 1.0 : isHovered ? 0.9 : 0.4,
-          strokeWeight: isSelected ? 2.5 : isHovered ? 1.5 : 0.6,
+          strokeOpacity: isSelected ? 1.0 : isHovered ? 0.95 : 0.65, // >20% more solid (was 0.4)
+          strokeWeight: isSelected ? 3.0 : isHovered ? 2.0 : 1.2,    // solid defined boundary (was 0.6)
           fillColor: color,
-          fillOpacity: opacity,
+          fillOpacity: opacity, // lighter opacity
           map,
           center: { lat: cell.lat, lng: cell.lng },
           radius: 750, // 750m radius (1.5km diameter fits cell spacing)
@@ -606,11 +608,6 @@ export function GoogleMap({
         >
           County Grid (Local)
         </button>
-      </div>
-
-      {/* Scan line effect */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
-        <div className="absolute left-0 right-0 h-32 bg-gradient-to-b from-transparent via-cool-500/5 to-transparent animate-scan" />
       </div>
 
       {/* Map overlay: legend */}

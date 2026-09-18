@@ -300,7 +300,7 @@ export function SimulationCanvas({
         onCameraChange({
           center: centerCoord,
           zoom: Math.round(15 - Math.log2(localVec.length() / 100)),
-          heading: Math.round(controls.getAzimuthalAngle() * (180 / Math.PI)),
+          heading: 0, // Lock strictly to 0 to prevent 90-degree map rotation
           tilt: Math.round(controls.getPolarAngle() * (180 / Math.PI)),
         });
       }
@@ -455,26 +455,26 @@ export function SimulationCanvas({
       // Cache cell local position for quick access in particle simulation
       cellPositionsRef.current[cell.id] = localPos.clone();
 
-      // Determine risk color based on CCG score
-      let cellColor = 0x475569; // default slate
-      if (cell.ccg >= 0.75) cellColor = 0xdc2626; // Severe (Red)
-      else if (cell.ccg >= 0.5) cellColor = 0xea580c; // High (Orange)
-      else if (cell.ccg >= 0.3) cellColor = 0xf59e0b; // Elevated (Amber)
-      else if (cell.ccg >= 0.15) cellColor = 0xfbbf24; // Moderate (Yellow)
+      // Determine risk color based on CCG score (Lighter luminous palette)
+      let cellColor = 0x64748b; // default slate
+      if (cell.ccg >= 0.75) cellColor = 0xf87171; // Lighter Severe (Soft Red, was 0xdc2626)
+      else if (cell.ccg >= 0.5) cellColor = 0xfb923c; // Lighter High (Soft Orange, was 0xea580c)
+      else if (cell.ccg >= 0.3) cellColor = 0xfcd34d; // Lighter Elevated (Amber, was 0xf59e0b)
+      else if (cell.ccg >= 0.15) cellColor = 0xfde047; // Lighter Moderate (Yellow, was 0xfbbf24)
 
       // Render Volumetric Holographic Risk Prism
       const radius = 500;
       const height = 90 + cell.ccg * 850;
       const isSelected = cell.id === selectedCell?.id;
 
-      // Hexagonal cylinder prism with translucent glass material
+      // Hexagonal cylinder prism with translucent glass material (lighter fill)
       const prismGeom = new THREE.CylinderGeometry(radius, radius, height, 6);
       const prismMat = new THREE.MeshStandardMaterial({
         color: isSelected ? 0x0ea5e9 : cellColor,
         roughness: 0.22,
         metalness: 0.12,
         transparent: true,
-        opacity: isSelected ? 0.50 : (cell.ccg >= 0.5 ? 0.32 : 0.16),
+        opacity: isSelected ? 0.38 : (cell.ccg >= 0.5 ? 0.22 : 0.12),
         depthWrite: false,
         side: THREE.DoubleSide,
       });
@@ -483,25 +483,25 @@ export function SimulationCanvas({
       cylinder.position.copy(localPos);
       cylinder.position.y += height / 2;
 
-      // Crisp glowing neon hexagonal edges
+      // Crisp glowing neon hexagonal edges (20%+ more solid boundary)
       const edgesGeom = new THREE.EdgesGeometry(prismGeom);
       const edgesMat = new THREE.LineBasicMaterial({
         color: isSelected ? 0x38bdf8 : cellColor,
-        linewidth: 2,
+        linewidth: 2.5,
         transparent: true,
-        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.85 : 0.45),
+        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.95 : 0.65), // was 0.45 (20%+ more solid)
       });
       const edges = new THREE.LineSegments(edgesGeom, edgesMat);
       cylinder.add(edges);
       gridGroup.add(cylinder);
 
-      // Ground-projected tactical risk ring
+      // Ground-projected tactical risk ring (20%+ more solid boundary)
       const ringGeom = new THREE.RingGeometry(radius * 0.92, radius, 6);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: isSelected ? 0x0ea5e9 : cellColor,
+        color: isSelected ? 0x38bdf8 : cellColor,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.75 : 0.35),
+        opacity: isSelected ? 1.0 : (cell.ccg >= 0.5 ? 0.92 : 0.55), // was 0.35 (20%+ more solid)
         depthWrite: false,
       });
       const ring = new THREE.Mesh(ringGeom, ringMat);
@@ -777,7 +777,7 @@ export function SimulationCanvas({
       if (tooltip) {
         if (hoveredCellObj && hoveredCellObj.nearestStationLat && hoveredCellObj.nearestStationLng) {
           const stnECEF = latLngToECEF(hoveredCellObj.nearestStationLat, hoveredCellObj.nearestStationLng, 0);
-          const localPos = stnECEF.clone().applyQuaternion(quaternion).add(offset);
+          const localPos = stnECEF.clone().applyQuaternion(enuRotation).add(offset);
           localPos.y += 140; // Position text slightly above the beacon sphere
 
           // Project
@@ -868,9 +868,9 @@ export function SimulationCanvas({
     cellMeshesRef.current.forEach((mesh) => {
       const isSelected = mesh.id === selectedCell?.id;
       (mesh.cylinder.material as THREE.MeshStandardMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
-      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.50 : (mesh.baseColor === 0xdc2626 ? 0.32 : 0.16);
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.38 : (mesh.baseColor === 0xf87171 ? 0.22 : 0.12);
       (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
-      (mesh.ring.material as THREE.MeshBasicMaterial).opacity = isSelected ? 1.0 : 0.65;
+      (mesh.ring.material as THREE.MeshBasicMaterial).opacity = isSelected ? 1.0 : 0.75;
     });
 
     // 3. Reset particle systems centered around the new selection (if not currently playing)
@@ -1070,7 +1070,7 @@ export function SimulationCanvas({
     cellMeshesRef.current.forEach((mesh) => {
       const isSelected = mesh.id === selectedCell?.id;
       (mesh.cylinder.material as THREE.MeshStandardMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
-      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.50 : (mesh.baseColor === 0xdc2626 ? 0.32 : 0.16);
+      (mesh.cylinder.material as THREE.MeshStandardMaterial).opacity = isSelected ? 0.38 : (mesh.baseColor === 0xf87171 ? 0.22 : 0.12);
       (mesh.ring.material as THREE.MeshBasicMaterial).color.setHex(isSelected ? 0x0ea5e9 : mesh.baseColor);
     });
 

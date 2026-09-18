@@ -16,16 +16,16 @@ interface HexMapProps {
 }
 
 function riskColor(ccg: number): string {
-  if (ccg >= 0.75) return '#DC2626';
-  if (ccg >= 0.5) return '#EA580C';
-  if (ccg >= 0.3) return '#F59E0B';
-  if (ccg >= 0.15) return '#FBBF24';
-  return '#1E3A5F';
+  if (ccg >= 0.75) return '#F87171'; // Lighter soft red (was #DC2626)
+  if (ccg >= 0.5) return '#FB923C';  // Lighter soft orange (was #EA580C)
+  if (ccg >= 0.3) return '#FCD34D';  // Lighter amber (was #F59E0B)
+  if (ccg >= 0.15) return '#FDE047'; // Lighter yellow (was #FBBF24)
+  return '#60A5FA';                  // Lighter bright sky blue (was dark navy #1E3A5F)
 }
 
 function riskOpacity(ccg: number): number {
-  if (ccg < 0.1) return 0.08;
-  return 0.15 + ccg * 0.75;
+  if (ccg < 0.1) return 0.06;
+  return 0.10 + ccg * 0.35; // Lighter translucent fill (was 0.15 + ccg * 0.75)
 }
 
 export function HexMap({
@@ -135,11 +135,6 @@ export function HexMap({
         >
           County Grid (Local)
         </button>
-      </div>
-
-      {/* Scan line effect */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute left-0 right-0 h-32 bg-gradient-to-b from-transparent via-cool-500/5 to-transparent animate-scan" />
       </div>
 
       <svg
@@ -285,9 +280,9 @@ export function HexMap({
                   points={cell.vertices}
                   fill={color}
                   fillOpacity={opacity}
-                  stroke={isSelected ? '#F1F5F9' : isHovered ? '#94A3B8' : color}
-                  strokeWidth={isSelected ? (viewMode === 'usa' ? 1.2 : 2) : isHovered ? (viewMode === 'usa' ? 0.8 : 1.5) : 0.4}
-                  strokeOpacity={isSelected ? 1 : isHovered ? 0.8 : 0.3}
+                  stroke={isSelected ? '#F1F5F9' : isHovered ? '#CBD5E1' : color}
+                  strokeWidth={isSelected ? (viewMode === 'usa' ? 1.6 : 2.6) : isHovered ? (viewMode === 'usa' ? 1.2 : 1.8) : 0.8}
+                  strokeOpacity={isSelected ? 1 : isHovered ? 0.95 : 0.60} // >20% more solid (was 0.3)
                   className="cursor-pointer transition-all duration-150"
                   style={{
                     filter: isHovered || isSelected ? 'brightness(1.3)' : 'none',

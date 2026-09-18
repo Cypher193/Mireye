@@ -23,12 +23,12 @@ interface VisualizerBridgeProps {
 export function VisualizerBridge(props: VisualizerBridgeProps) {
   const { visualizerMode, onVisualizerModeChange, ...rest } = props;
 
-  // Shared camera spatial state
+  // Shared camera spatial state (Strict North-up 0-degree planar default)
   const [cameraState, setCameraState] = useState({
     center: { lat: 37.0902, lng: -95.7129 }, // Center of USA
     zoom: 4,
     heading: 0,
-    tilt: 45,
+    tilt: 0,
   });
 
   const selectedCellObj = useMemo(() => {
